@@ -117,6 +117,9 @@ E-ink display (reMarkable Paper Pro)## Device setup
 - [ ] **Refresh-mode hints per node.** `refreshMode="fast" | "quality"` prop to choose A2 (fast, mono) vs GC16 (quality) waveforms. Critical for animations vs. static text.
 - [ ] **Pen / stylus input.** Paper Pro has a Wacom digitizer; we currently only handle finger touch via `MouseArea`. Read pen evdev events and expose a JS gesture stream.
 
+### Networking
+- [x] ~~`fetch`~~ — implemented via `QNetworkAccessManager`. C++ host registers `N.fetch(url, opts)` returning a JS Promise; the inline polyfill exposes a browser-style `globalThis.fetch` with `.text()` / `.json()` / `.headers.get(name)`. Supports `GET`/`POST`/`PUT`/`DELETE`/`HEAD` plus arbitrary methods, request body (string), request headers, and a 30s default transfer timeout. Reply finishes on the Qt main thread, which is also the JSI thread, so promise resolution is thread-safe. No streaming, no `FormData`, no abort signal yet.
+
 ### Component library
 - [ ] **`Pressable`** with proper press/release visual states (current `TouchableOpacity` doesn't even change opacity).
 - [ ] **`ScrollView`** — Yoga `overflow: scroll`, scroll state in JS, clip rect in `paintNode`.

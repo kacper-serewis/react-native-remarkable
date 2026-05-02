@@ -8,6 +8,10 @@
 #include <QObject>
 #include <QDebug>
 #include <QTimer>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QUrl>
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
@@ -622,6 +626,157 @@ int main(int argc, char* argv[]) {
   )"), "polyfills");
 
   wire(*runtime, scr, nodes, tcb);
+
+  // ── N.fetch(url, opts) → Promise<Response>
+  // Backed by QNetworkAccessManager. Reply finishes on the Qt main
+  // thread, which is also the JSI thread, so resolve/reject is safe.
+  auto nam = std::make_shared<QNetworkAccessManager>();
+  {
+    auto N = runtime->global()
+      .getProperty(*runtime, "N").asObject(*runtime);
+
+    N.setProperty(*runtime, "fetch",
+      jsi::Function::createFromHostFunction(*runtime,
+        jsi::PropNameID::forAscii(*runtime, "fetch"), 2,
+        [&runtime, nam](jsi::Runtime& rt, const jsi::Value&,
+                        const jsi::Value* a, size_t n) -> jsi::Value {
+          if (n < 1) {
+            throw jsi::JSError(rt, "fetch: url is required");
+          }
+          QString url = QString::fromStdString(str(rt, a[0]));
+          QString method = "GET";
+          QByteArray body;
+          QList<QPair<QByteArray, QByteArray>> headers;
+
+          if (n > 1 && a[1].isObject()) {
+            auto opts = a[1].getObject(rt);
+            if (opts.hasProperty(rt, "method"))
+              method = QString::fromStdString(
+                str(rt, opts.getProperty(rt, "method"))).toUpper();
+            if (opts.hasProperty(rt, "body") &&
+                opts.getProperty(rt, "body").isString())
+              body = QByteArray::fromStdString(
+                opts.getProperty(rt, "body").toString(rt).utf8(rt));
+            if (opts.hasProperty(rt, "headers") &&
+                opts.getProperty(rt, "headers").isObject()) {
+              auto hdrs = opts.getProperty(rt, "headers").getObject(rt);
+              auto names = hdrs.getPropertyNames(rt);
+              size_t ln = names.size(rt);
+              for (size_t i = 0; i < ln; i++) {
+                std::string k = names.getValueAtIndex(rt, i)
+                  .toString(rt).utf8(rt);
+                std::string v = str(rt, hdrs.getProperty(rt, k.c_str()));
+                headers.append({QByteArray::fromStdString(k),
+                                QByteArray::fromStdString(v)});
+              }
+            }
+          }
+
+          QNetworkRequest req((QUrl(url)));
+          req.setTransferTimeout(30000);
+          for (const auto& h : headers)
+            req.setRawHeader(h.first, h.second);
+
+          QNetworkReply* reply = nullptr;
+          if (method == "GET")          reply = nam->get(req);
+          else if (method == "POST")    reply = nam->post(req, body);
+          else if (method == "PUT")     reply = nam->put(req, body);
+          else if (method == "DELETE")  reply = nam->deleteResource(req);
+          else if (method == "HEAD")    reply = nam->head(req);
+          else reply = nam->sendCustomRequest(req, method.toUtf8(), body);
+
+          // Build the JS-side Promise(executor) that captures
+          // resolve/reject and connects them to reply->finished.
+          auto Promise = rt.global()
+            .getPropertyAsFunction(rt, "Promise");
+
+          auto executor = jsi::Function::createFromHostFunction(rt,
+            jsi::PropNameID::forAscii(rt, "fetchExec"), 2,
+            [&runtime, reply, urlCopy = url](
+              jsi::Runtime& rt2, const jsi::Value&,
+              const jsi::Value* args, size_t na) -> jsi::Value {
+              if (na < 2) return jsi::Value::undefined();
+              auto resolve = std::make_shared<jsi::Function>(
+                args[0].getObject(rt2).asFunction(rt2));
+              auto reject = std::make_shared<jsi::Function>(
+                args[1].getObject(rt2).asFunction(rt2));
+
+              QObject::connect(reply, &QNetworkReply::finished,
+                [&runtime, reply, resolve, reject, urlCopy]() {
+                  jsi::Runtime& r = *runtime;
+                  try {
+                    if (reply->error() != QNetworkReply::NoError) {
+                      auto err = jsi::Object(r);
+                      err.setProperty(r, "message",
+                        jsi::String::createFromUtf8(r,
+                          reply->errorString().toStdString()));
+                      reject->call(r, std::move(err));
+                    } else {
+                      auto res = jsi::Object(r);
+                      int status = reply->attribute(
+                        QNetworkRequest::HttpStatusCodeAttribute).toInt();
+                      QString reason = reply->attribute(
+                        QNetworkRequest::HttpReasonPhraseAttribute)
+                        .toString();
+                      res.setProperty(r, "status", jsi::Value(status));
+                      res.setProperty(r, "statusText",
+                        jsi::String::createFromUtf8(r,
+                          reason.toStdString()));
+                      res.setProperty(r, "url",
+                        jsi::String::createFromUtf8(r,
+                          urlCopy.toStdString()));
+                      QByteArray bytes = reply->readAll();
+                      res.setProperty(r, "body",
+                        jsi::String::createFromUtf8(r,
+                          std::string(bytes.constData(), bytes.size())));
+                      auto hdrs = jsi::Object(r);
+                      for (const auto& p : reply->rawHeaderPairs()) {
+                        hdrs.setProperty(r,
+                          jsi::PropNameID::forUtf8(r,
+                            QString::fromUtf8(p.first).toLower().toStdString()),
+                          jsi::String::createFromUtf8(r,
+                            QString::fromUtf8(p.second).toStdString()));
+                      }
+                      res.setProperty(r, "headers", hdrs);
+                      resolve->call(r, std::move(res));
+                    }
+                  } catch (const jsi::JSError& e) {
+                    qWarning() << "[fetch] resolve error:"
+                               << e.getMessage().c_str();
+                  } catch (...) {}
+                  reply->deleteLater();
+                });
+              return jsi::Value::undefined();
+            });
+
+          return Promise.callAsConstructor(rt, std::move(executor));
+        }));
+  }
+
+  // Browser-style fetch() polyfill — wraps N.fetch in a Response-like
+  // object. Body is delivered as a string (no streaming for now).
+  runtime->evaluateJavaScript(std::make_unique<jsi::StringBuffer>(R"(
+    globalThis.fetch = function(url, opts) {
+      return N.fetch(String(url), opts || {}).then(function(res) {
+        return {
+          ok: res.status >= 200 && res.status < 300,
+          status: res.status,
+          statusText: res.statusText || "",
+          url: res.url,
+          headers: {
+            get: function(name) {
+              return res.headers[String(name).toLowerCase()] || null;
+            }
+          },
+          text: function() { return Promise.resolve(res.body); },
+          json: function() {
+            try { return Promise.resolve(JSON.parse(res.body)); }
+            catch (e) { return Promise.reject(e); }
+          }
+        };
+      });
+    };
+  )"), "fetch-polyfill");
 
   try {
     runtime->evaluateJavaScript(

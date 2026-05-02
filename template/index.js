@@ -160,6 +160,15 @@ function App() {
   // TextInput demo
   const [textValue, setTextValue] = useState("");
 
+  // fetch() demo — get device's public IPv4
+  const [ip, setIp] = useState("loading...");
+  useEffect(() => {
+    fetch("https://api.ipify.org?format=json")
+      .then((r) => r.json())
+      .then((d) => setIp(d.ip))
+      .catch((e) => setIp("error: " + (e && e.message ? e.message : e)));
+  }, []);
+
   // Concurrent React: useTransition + useDeferredValue
   const [load, setLoad] = useState(0);
   const [isPending, startTransition] = useTransition();
@@ -232,6 +241,27 @@ function App() {
           placeholder="Tap and type with a paired keyboard..."
           style={{ width: W - 80, marginBottom: 16 }}
         />
+
+        <View
+          style={{
+            width: W - 80,
+            backgroundColor: "#f0f0f0",
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 16,
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+            height: 70,
+          }}
+        >
+          <Text style={{ fontSize: 20, color: "#444444", width: 200, height: 32 }}>
+            Public IPv4 (fetch):
+          </Text>
+          <Text style={{ fontSize: 22, color: "#000000", width: W - 320, height: 32 }}>
+            {ip}
+          </Text>
+        </View>
 
         <View style={styles.row}>
           <View style={styles.card}>

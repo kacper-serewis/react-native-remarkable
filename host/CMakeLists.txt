@@ -3,7 +3,7 @@ project(rn-layout)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_AUTOMOC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick)
+find_package(Qt6 REQUIRED COMPONENTS Quick Network)
 
 set(HERMES_SRC   /hermes)
 set(HERMES_BUILD /hermes/build)
@@ -23,6 +23,7 @@ target_include_directories(rn-layout PRIVATE
 
 target_link_libraries(rn-layout PRIVATE
   Qt6::Quick
+  Qt6::Network
   ${YOGA_BUILD}/yoga/libyogacore.a
   ${HERMES_BUILD}/lib/libhermesvm.so
   ${HERMES_BUILD}/jsi/libjsi.a
