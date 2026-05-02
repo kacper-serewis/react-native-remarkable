@@ -136,7 +136,7 @@ E-ink display (reMarkable Paper Pro)## Device setup
 
 ### Bigger swings
 - [ ] **Drop QML.** The `QQmlApplicationEngine` exists only to display one `Image`. Blit the `QImage` directly to `/dev/fb0` to shrink the binary, drop dependencies, and speed up startup.
-- [ ] **Concurrent React.** Switch `createContainer` from `tag: 0` (LegacyRoot) to `tag: 1` (ConcurrentRoot) to enable Suspense, transitions, and `useDeferredValue`. The scheduler polyfills already support it.
+- [x] ~~Concurrent React.~~ `createContainer` now passes `tag: 1` (ConcurrentRoot) — Suspense, transitions, and `useDeferredValue` are available.
 - [ ] **`requestAnimationFrame`** driven by a 10–15 Hz `QTimer` for the cases where animation makes sense on e-paper (drag handles, sliders).
 
 ## Acknowledgements

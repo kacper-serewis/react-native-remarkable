@@ -310,7 +310,7 @@ export function render(element) {
     };
     _root = reconciler.createContainer(
       _container,                     // containerInfo
-      0,                              // tag (LegacyRoot)
+      1,                              // tag (ConcurrentRoot)
       null,                           // hydrationCallbacks
       false,                          // isStrictMode
       null,                           // concurrentUpdatesByDefaultOverride

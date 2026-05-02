@@ -4,6 +4,8 @@ import React, {
   useRef,
   useCallback,
   useMemo,
+  useTransition,
+  useDeferredValue,
 } from "react";
 import { render, W_SCREEN, H_SCREEN } from "./RemarkableRenderer";
 import { View, Text, TouchableOpacity, StyleSheet } from "./components";
@@ -83,6 +85,48 @@ const styles = StyleSheet.create({
   },
   cardLabel: { fontSize: 18, color: "#888888", width: 160, height: 36 },
   cardValue: { fontSize: 28, color: "#000000", width: 160, height: 48 },
+  concurrent: {
+    width: W - 80,
+    marginTop: 24,
+    padding: 20,
+    backgroundColor: "#f0f0f0",
+    borderRadius: 12,
+  },
+  concurrentTitle: {
+    fontSize: 22,
+    color: "#000000",
+    width: W - 120,
+    height: 32,
+  },
+  concurrentRow: {
+    width: W - 120,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    height: 40,
+    marginTop: 8,
+  },
+  concurrentLabel: { fontSize: 18, color: "#444444", width: 240, height: 40 },
+  concurrentValue: {
+    fontSize: 18,
+    color: "#000000",
+    width: 240,
+    height: 40,
+  },
+  concurrentValueStale: {
+    fontSize: 18,
+    color: "#cc0000",
+    width: 240,
+    height: 40,
+  },
+  btnAmber: {
+    width: W - 80,
+    height: 90,
+    backgroundColor: "#aa5500",
+    borderRadius: 16,
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: 16,
+  },
   footer: {
     width: W,
     height: 70,
@@ -93,10 +137,28 @@ const styles = StyleSheet.create({
   footerText: { fontSize: 18, color: "#888888", width: W - 40, height: 70 },
 });
 
+// Artificial heavy work — gives concurrent rendering something visible
+// to slice. Returns a number derived from `seed` after burning ~80–120ms.
+function heavyCompute(seed) {
+  let acc = seed;
+  for (let i = 0; i < 6_000_000; i++) acc = (acc * 31 + i) | 0;
+  return acc;
+}
+
 function App() {
   // Real React hooks
   const [count, setCount] = useState(0);
   const [running, setRunning] = useState(false);
+
+  // Concurrent React: useTransition + useDeferredValue
+  const [load, setLoad] = useState(0);
+  const [isPending, startTransition] = useTransition();
+  const deferredCount = useDeferredValue(count);
+  const heavyResult = useMemo(
+    () => heavyCompute(deferredCount + load),
+    [deferredCount, load],
+  );
+  const isStale = count !== deferredCount;
 
   // useRef — persists across renders, no re-render on change
   const timerRef = useRef(null);
@@ -167,6 +229,46 @@ function App() {
             <Text style={styles.cardLabel}>useMemo</Text>
             <Text style={styles.cardValue}>{parity}</Text>
           </View>
+        </View>
+
+        <View style={styles.concurrent}>
+          <Text style={styles.concurrentTitle}>Concurrent React</Text>
+
+          <View style={styles.concurrentRow}>
+            <Text style={styles.concurrentLabel}>count (urgent)</Text>
+            <Text style={styles.concurrentValue}>{count}</Text>
+          </View>
+
+          <View style={styles.concurrentRow}>
+            <Text style={styles.concurrentLabel}>deferred count</Text>
+            <Text
+              style={
+                isStale ? styles.concurrentValueStale : styles.concurrentValue
+              }
+            >
+              {deferredCount}
+              {isStale ? "  (catching up...)" : ""}
+            </Text>
+          </View>
+
+          <View style={styles.concurrentRow}>
+            <Text style={styles.concurrentLabel}>heavy result</Text>
+            <Text style={styles.concurrentValue}>
+              {String(heavyResult).slice(-6)}
+              {isPending ? "  (pending...)" : ""}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.btnAmber}
+            onPress={() =>
+              startTransition(() => setLoad((l) => l + 1))
+            }
+          >
+            <Text style={styles.buttonTextSm}>
+              Heavy update via startTransition (load: {load})
+            </Text>
+          </TouchableOpacity>
         </View>
       </View>
 
