@@ -23,6 +23,7 @@ npx react-native bundle \
   --dev false \
   --entry-file index.js \
   --bundle-output ../dist/remarkable.bundle.js \
+  --sourcemap-output ../dist/remarkable.bundle.js.map \
   --reset-cache
 cd ..
 

@@ -2,7 +2,8 @@
 set -e
 
 DEVICE=${1:-192.168.1.196}
-DIST="$(dirname $0)/../dist"
+SCRIPTS="$(dirname $0)"
+DIST="$SCRIPTS/../dist"
 
 if [ ! -f "$DIST/rn-layout" ]; then
   echo "Error: dist/ not found. Run ./scripts/build.sh first."
@@ -31,4 +32,4 @@ ssh root@$DEVICE "
   LD_LIBRARY_PATH=~/hermes-host \
   QT_QUICK_BACKEND=epaper \
   ~/rn-app/rn-layout ~/rn-app/remarkable.bundle.js -platform epaper
-"
+" 2>&1 | node "$SCRIPTS/translate-stack.js"

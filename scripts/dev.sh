@@ -12,6 +12,7 @@ npx react-native bundle \
   --dev false \
   --entry-file index.js \
   --bundle-output ../dist/remarkable.bundle.js \
+  --sourcemap-output ../dist/remarkable.bundle.js.map \
   --reset-cache
 cd ..
 
@@ -23,4 +24,4 @@ ssh root@$DEVICE "
   LD_LIBRARY_PATH=~/hermes-host \
   QT_QUICK_BACKEND=epaper \
   ~/rn-app/rn-layout ~/rn-app/remarkable.bundle.js -platform epaper
-"
+" 2>&1 | node "$ROOT/scripts/translate-stack.js"

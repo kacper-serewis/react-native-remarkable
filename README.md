@@ -125,7 +125,7 @@ E-ink display (reMarkable Paper Pro)## Device setup
 
 ### Developer experience
 - [ ] **Hot reload.** Add a `__rmReload(source)` JSI host function and a tiny client in `dev.sh` that watches `dist/remarkable.bundle.js` and pushes it over the existing SSH session — kill `scp` + restart loop.
-- [ ] **Source maps.** Bundle with `--sourcemap-output` and translate stack frames in the host's error logger. Today every JS error reports `bundle.js:20:NNN`.
+- [x] ~~Source maps.~~ Metro now emits `dist/remarkable.bundle.js.map`. `scripts/translate-stack.js` reads stdin and rewrites any `bundle.js:LINE:COL` reference to `original-source:LINE:COL` using `@jridgewell/trace-mapping`. `dev.sh` and `deploy.sh` pipe device output through it. Translation runs on the dev machine — nothing extra ships to the device.
 - [ ] **Public package.** Promote `template/components.js` and `template/RemarkableRenderer.js` into a published `react-remarkable` package so apps can `npm install` instead of copying the template.
 - [ ] **TypeScript types.** Ship `.d.ts` for the host components and the `N.*` JSI surface.
 
@@ -135,7 +135,7 @@ E-ink display (reMarkable Paper Pro)## Device setup
 - [ ] Document the JS-only fast path (`dev.sh`) more prominently.
 
 ### Bigger swings
-- [ ] **Drop QML.** The `QQmlApplicationEngine` exists only to display one `Image`. Blit the `QImage` directly to `/dev/fb0` to shrink the binary, drop dependencies, and speed up startup.
+- [ ] ~~Drop QML.~~ **Not viable on Paper Pro.** Tried it: replacing the QML `Image` with `QRasterWindow` produces a window that never draws anything (not even a clear). The reMarkable epaper QPA plugin appears to expose only screen geometry + input — display flushing to the e-ink panel is done by the dedicated **QtQuick scenegraph backend** (`QT_QUICK_BACKEND=epaper`), not by `QPlatformBackingStore::flush()`. So removing QtQuick removes the only working display path. Doing this for real would require writing a custom QPA backing store implementation that drives the e-ink waveform driver — much bigger than the binary-size win is worth.
 - [x] ~~Concurrent React.~~ `createContainer` now passes `tag: 1` (ConcurrentRoot) — Suspense, transitions, and `useDeferredValue` are available.
 - [ ] **`requestAnimationFrame`** driven by a 10–15 Hz `QTimer` for the cases where animation makes sense on e-paper (drag handles, sliders).
 
