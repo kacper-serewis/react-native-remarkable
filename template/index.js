@@ -13,6 +13,7 @@ import {
   Text,
   TouchableOpacity,
   TextInput,
+  OnScreenKeyboard,
   StyleSheet,
 } from "./components";
 
@@ -293,6 +294,8 @@ function App() {
           Real React hooks — no reimplementation
         </Text>
       </View>
+
+      <OnScreenKeyboard />
     </View>
   );
 }

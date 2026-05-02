@@ -120,7 +120,8 @@ E-ink display (reMarkable Paper Pro)## Device setup
 ### Component library
 - [ ] **`Pressable`** with proper press/release visual states (current `TouchableOpacity` doesn't even change opacity).
 - [ ] **`ScrollView`** — Yoga `overflow: scroll`, scroll state in JS, clip rect in `paintNode`.
-- [x] ~~`TextInput`~~ — works with any paired/external keyboard (BT or folio). The QML root `Item` captures `Keys.onPressed`, the C++ host maps Qt key codes to JS-friendly names (`"Backspace"`, `"Enter"`, `"ArrowLeft"`, …) and forwards `(keyName, text)` to a global `__rmKeyDown`. JS-side `RemarkableRenderer` exposes `setKeyHandler` / `clearKeyHandler`; `TextInput` registers a handler when focused (tap-to-focus) and renders value + cursor (`|`). Software on-screen keyboard is a separate follow-up — the QPA `epaperkeyboardhandler` only covers physical key events.
+- [x] ~~`TextInput`~~ — physical keys (BT/folio): QML root `Item` captures `Keys.onPressed`, the C++ host maps Qt key codes to JS-friendly names (`"Backspace"`, `"Enter"`, `"ArrowLeft"`, …) and forwards `(keyName, text)` to a global `__rmKeyDown`. JS-side `RemarkableRenderer` exposes `setKeyHandler` / `clearKeyHandler` / `dispatchKey`; `TextInput` registers a handler when focused (tap-to-focus) and renders value + cursor (`|`).
+- [x] ~~On-screen keyboard~~ — `OnScreenKeyboard` component auto-shows whenever any `TextInput` is focused (via `useHasFocusedInput`). QWERTY layout + shift + 123-symbols + space + backspace + enter. Each key calls `dispatchKey()` which feeds the same handler that physical keys use, so `TextInput` is agnostic to input source. Overlays the bottom of the screen via `position: 'absolute'` (added to `applyProps` and `styleToProps` to support this).
 - [ ] **`Image`** — load PNG/JPEG via Qt and paint into a node's bounds.
 
 ### Developer experience

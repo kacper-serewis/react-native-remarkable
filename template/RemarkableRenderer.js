@@ -30,6 +30,11 @@ function styleToProps(style = {}) {
     "borderColor",
     "color",
     "fontSize",
+    "position",
+    "top",
+    "bottom",
+    "left",
+    "right",
   ];
   keys.forEach((k) => {
     if (style[k] !== undefined) p[k] = style[k];
@@ -334,7 +339,9 @@ global.__rmTouchUp = function () {};
 
 // ── Keyboard / focus ──────────────────────────────────────────────
 // Single focused key handler at a time. TextInput (or any other
-// focusable component) registers itself via setKeyHandler.
+// focusable component) registers itself via setKeyHandler. The same
+// path serves both physical key events (from the C++ host via
+// __rmKeyDown) and synthetic key events from the on-screen keyboard.
 let _keyHandler = null;
 export function setKeyHandler(fn) {
   _keyHandler = fn;
@@ -342,10 +349,13 @@ export function setKeyHandler(fn) {
 export function clearKeyHandler(fn) {
   if (_keyHandler === fn) _keyHandler = null;
 }
-
-global.__rmKeyDown = function (keyName, text) {
+export function dispatchKey(keyName, text) {
   if (_keyHandler) {
     try { _keyHandler(keyName, text); }
     catch (e) { console.error("key handler error:", e); }
   }
+}
+
+global.__rmKeyDown = function (keyName, text) {
+  dispatchKey(keyName, text);
 };

@@ -129,6 +129,25 @@ static void applyProps(jsi::Runtime& rt, RNNode* node, const jsi::Object& props)
     else if (ai == "flex-start") YGNodeStyleSetAlignItems(node->yoga, YGAlignFlexStart);
   }
 
+  // Absolute / relative positioning
+  if (props.hasProperty(rt, "position")) {
+    std::string pos = str(rt, props.getProperty(rt, "position"));
+    YGNodeStyleSetPositionType(node->yoga,
+      pos == "absolute" ? YGPositionTypeAbsolute : YGPositionTypeRelative);
+  }
+  if (props.hasProperty(rt, "top"))
+    YGNodeStyleSetPosition(node->yoga, YGEdgeTop,
+      props.getProperty(rt, "top").asNumber());
+  if (props.hasProperty(rt, "bottom"))
+    YGNodeStyleSetPosition(node->yoga, YGEdgeBottom,
+      props.getProperty(rt, "bottom").asNumber());
+  if (props.hasProperty(rt, "left"))
+    YGNodeStyleSetPosition(node->yoga, YGEdgeLeft,
+      props.getProperty(rt, "left").asNumber());
+  if (props.hasProperty(rt, "right"))
+    YGNodeStyleSetPosition(node->yoga, YGEdgeRight,
+      props.getProperty(rt, "right").asNumber());
+
   // Padding
   if (props.hasProperty(rt, "padding"))
     YGNodeStyleSetPadding(node->yoga, YGEdgeAll, props.getProperty(rt, "padding").asNumber());
