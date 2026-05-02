@@ -78,7 +78,8 @@ export function TextInput({
     return () => clearKeyHandler(handler);
   }, [focused, value, onChangeText]);
 
-  const display = (value || (focused ? "" : placeholder)) + (focused ? "|" : "");
+  const display =
+    (value || (focused ? "" : placeholder)) + (focused ? "|" : "");
 
   return React.createElement(
     "view",
@@ -90,7 +91,8 @@ export function TextInput({
         borderRadius: 8,
         padding: 12,
         height: 60,
-        justifyContent: "center",
+        flexDirection: "row",
+        alignItems: "center",
         ...style,
       },
       onPress: () => setFocus(token),
@@ -101,6 +103,8 @@ export function TextInput({
         style: {
           fontSize: 24,
           color: value ? "#000000" : "#888888",
+          flex: 1,
+          height: 36,
           ...textStyle,
         },
       },
@@ -122,7 +126,7 @@ const ROW_LETTERS = [
 ];
 const ROW_SYMBOLS = [
   ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
-  ["-", "/", ":", ";", "(", ")", "$", "&", "@", "\""],
+  ["-", "/", ":", ";", "(", ")", "$", "&", "@", '"'],
   [".", ",", "?", "!", "'"],
 ];
 
@@ -158,6 +162,11 @@ function Key({ label, width, onPress, dark }) {
   );
 }
 
+// Each row: 80 (key height) + 8 (margin top+bottom) = 88. Four rows
+// (3 letters + 1 controls) + 16 padding ≈ 368. Round up for the
+// inter-row text box height.
+const KB_HEIGHT = 380;
+
 export function OnScreenKeyboard({ width = W_SCREEN }) {
   const visible = useHasFocusedInput();
   const [shift, setShift] = useState(false);
@@ -181,7 +190,8 @@ export function OnScreenKeyboard({ width = W_SCREEN }) {
         position: "absolute",
         bottom: 0,
         left: 0,
-        right: 0,
+        width,
+        height: KB_HEIGHT,
         backgroundColor: "#f0f0f0",
         padding: 8,
         flexDirection: "column",
@@ -197,6 +207,7 @@ export function OnScreenKeyboard({ width = W_SCREEN }) {
           style: {
             flexDirection: "row",
             justifyContent: "center",
+            height: 88,
           },
         },
         ...row.map((ch) =>
@@ -209,39 +220,44 @@ export function OnScreenKeyboard({ width = W_SCREEN }) {
         ),
       ),
     ),
-    // Bottom row: shift / symbols / space / backspace / enter
+    // Bottom row: shift / symbols / space / backspace / enter / hide
     React.createElement(
       "view",
       {
-        style: { flexDirection: "row", justifyContent: "center" },
+        style: { flexDirection: "row", justifyContent: "center", height: 88 },
       },
       React.createElement(Key, {
         label: symbols ? "ABC" : shift ? "SHIFT*" : "shift",
-        width: keyW * 1.5,
+        width: keyW * 1.3,
         dark: shift,
         onPress: () => (symbols ? setSymbols(false) : setShift((s) => !s)),
       }),
       React.createElement(Key, {
         label: "123",
-        width: keyW * 1.2,
+        width: keyW,
         dark: symbols,
         onPress: () => setSymbols((s) => !s),
       }),
       React.createElement(Key, {
         label: "space",
-        width: keyW * 4,
+        width: keyW * 3.5,
         onPress: () => dispatchKey("", " "),
       }),
       React.createElement(Key, {
         label: "⌫",
-        width: keyW * 1.2,
+        width: keyW,
         onPress: () => dispatchKey("Backspace", ""),
       }),
       React.createElement(Key, {
-        label: "↵",
-        width: keyW * 1.5,
+        label: "ENT",
+        width: keyW * 1.3,
         dark: true,
         onPress: () => dispatchKey("Enter", ""),
+      }),
+      React.createElement(Key, {
+        label: "\\/",
+        width: keyW,
+        onPress: () => setFocus(null),
       }),
     ),
   );
