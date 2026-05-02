@@ -47,6 +47,9 @@ public:
   Q_INVOKABLE void touchUp() {
     emit released();
   }
+  Q_INVOKABLE void keyDown(int key, const QString& text) {
+    emit keyPressed(key, text);
+  }
 
   void render(RNNode* root) {
     m_image.fill(Qt::white);
@@ -65,6 +68,7 @@ signals:
   void frameReady();
   void touched(double x, double y);
   void released();
+  void keyPressed(int key, QString text);
 
 private:
   QImage m_image;
@@ -410,6 +414,41 @@ int main(int argc, char* argv[]) {
       } catch(...) {}
     });
 
+  // Map Qt key codes to JS-friendly names. Printable characters arrive
+  // via the `text` argument; we only need names for the special ones.
+  auto qtKeyName = [](int key) -> std::string {
+    switch (key) {
+      case Qt::Key_Backspace: return "Backspace";
+      case Qt::Key_Return:
+      case Qt::Key_Enter:     return "Enter";
+      case Qt::Key_Escape:    return "Escape";
+      case Qt::Key_Tab:       return "Tab";
+      case Qt::Key_Left:      return "ArrowLeft";
+      case Qt::Key_Right:     return "ArrowRight";
+      case Qt::Key_Up:        return "ArrowUp";
+      case Qt::Key_Down:      return "ArrowDown";
+      case Qt::Key_Home:      return "Home";
+      case Qt::Key_End:       return "End";
+      case Qt::Key_Delete:    return "Delete";
+      default:                return "";
+    }
+  };
+
+  QObject::connect(scr, &Screen::keyPressed,
+    [&, qtKeyName](int key, QString text) {
+      try {
+        auto global = runtime->global();
+        if (!global.hasProperty(*runtime, "__rmKeyDown")) return;
+        auto fn = global.getPropertyAsFunction(*runtime, "__rmKeyDown");
+        fn.call(*runtime,
+          jsi::String::createFromUtf8(*runtime, qtKeyName(key)),
+          jsi::String::createFromUtf8(*runtime, text.toStdString()));
+      } catch (const jsi::JSError& e) {
+        qWarning() << "[key] JS error:" << e.getMessage().c_str();
+        qWarning() << "Stack:" << e.getStack().c_str();
+      } catch (...) {}
+    });
+
   // Console
   auto makeLog = [&](std::string lv) {
     return jsi::Function::createFromHostFunction(*runtime,
@@ -586,16 +625,28 @@ int main(int argc, char* argv[]) {
       width: Screen.width
       height: Screen.height
       visible: true
-      Image {
-        id: frame
+      Item {
+        id: root
         anchors.fill: parent
-        cache: false
-        source: "image://rnframe/frame"
-      }
-      MouseArea {
-        anchors.fill: parent
-        onPressed: rnScreen.touchDown(mouseX, mouseY)
-        onReleased: rnScreen.touchUp()
+        focus: true
+        Keys.onPressed: (event) => {
+          rnScreen.keyDown(event.key, event.text)
+          event.accepted = true
+        }
+        Image {
+          id: frame
+          anchors.fill: parent
+          cache: false
+          source: "image://rnframe/frame"
+        }
+        MouseArea {
+          anchors.fill: parent
+          onPressed: {
+            root.forceActiveFocus()
+            rnScreen.touchDown(mouseX, mouseY)
+          }
+          onReleased: rnScreen.touchUp()
+        }
       }
       Connections {
         target: rnScreen

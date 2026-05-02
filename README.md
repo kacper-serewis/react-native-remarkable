@@ -120,7 +120,7 @@ E-ink display (reMarkable Paper Pro)## Device setup
 ### Component library
 - [ ] **`Pressable`** with proper press/release visual states (current `TouchableOpacity` doesn't even change opacity).
 - [ ] **`ScrollView`** — Yoga `overflow: scroll`, scroll state in JS, clip rect in `paintNode`.
-- [ ] **`TextInput`** — wire the on-device keyboard (`epaperkeyboardhandler` is already loaded — see boot logs) and a host-side text-input model.
+- [x] ~~`TextInput`~~ — works with any paired/external keyboard (BT or folio). The QML root `Item` captures `Keys.onPressed`, the C++ host maps Qt key codes to JS-friendly names (`"Backspace"`, `"Enter"`, `"ArrowLeft"`, …) and forwards `(keyName, text)` to a global `__rmKeyDown`. JS-side `RemarkableRenderer` exposes `setKeyHandler` / `clearKeyHandler`; `TextInput` registers a handler when focused (tap-to-focus) and renders value + cursor (`|`). Software on-screen keyboard is a separate follow-up — the QPA `epaperkeyboardhandler` only covers physical key events.
 - [ ] **`Image`** — load PNG/JPEG via Qt and paint into a node's bounds.
 
 ### Developer experience

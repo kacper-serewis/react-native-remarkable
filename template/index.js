@@ -8,7 +8,13 @@ import React, {
   useDeferredValue,
 } from "react";
 import { render, W_SCREEN, H_SCREEN } from "./RemarkableRenderer";
-import { View, Text, TouchableOpacity, StyleSheet } from "./components";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  TextInput,
+  StyleSheet,
+} from "./components";
 
 const W = W_SCREEN;
 const H = H_SCREEN;
@@ -150,6 +156,9 @@ function App() {
   const [count, setCount] = useState(0);
   const [running, setRunning] = useState(false);
 
+  // TextInput demo
+  const [textValue, setTextValue] = useState("");
+
   // Concurrent React: useTransition + useDeferredValue
   const [load, setLoad] = useState(0);
   const [isPending, startTransition] = useTransition();
@@ -215,6 +224,13 @@ function App() {
         <TouchableOpacity style={styles.btnGrey} onPress={handleReset}>
           <Text style={styles.buttonTextSm}>Reset</Text>
         </TouchableOpacity>
+
+        <TextInput
+          value={textValue}
+          onChangeText={setTextValue}
+          placeholder="Tap and type with a paired keyboard..."
+          style={{ width: W - 80, marginBottom: 16 }}
+        />
 
         <View style={styles.row}>
           <View style={styles.card}>

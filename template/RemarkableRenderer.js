@@ -331,3 +331,21 @@ global.__rmTouchDown = function (x, y) {
   if (id !== -1) fireAt(id);
 };
 global.__rmTouchUp = function () {};
+
+// ── Keyboard / focus ──────────────────────────────────────────────
+// Single focused key handler at a time. TextInput (or any other
+// focusable component) registers itself via setKeyHandler.
+let _keyHandler = null;
+export function setKeyHandler(fn) {
+  _keyHandler = fn;
+}
+export function clearKeyHandler(fn) {
+  if (_keyHandler === fn) _keyHandler = null;
+}
+
+global.__rmKeyDown = function (keyName, text) {
+  if (_keyHandler) {
+    try { _keyHandler(keyName, text); }
+    catch (e) { console.error("key handler error:", e); }
+  }
+};
