@@ -11,6 +11,7 @@
 #include <memory>
 
 struct RNNode {
+  int id = 0;
   YGNodeRef yoga = nullptr;
   std::string type;       // "view" or "text"
 

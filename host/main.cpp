@@ -1,4 +1,5 @@
 #include <QGuiApplication>
+#include <QScreen>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickImageProvider>
@@ -190,6 +191,7 @@ static void wire(jsi::Runtime& rt, Screen* scr,
           applyProps(rt, node.get(), props);
         }
         int id = nextId++;
+        node->id = id;
         nodes[id] = node;
         return jsi::Value(id);
       }));
@@ -223,6 +225,34 @@ static void wire(jsi::Runtime& rt, Screen* scr,
                           parent->children.size());
         parent->children.push_back(child);
         return jsi::Value::undefined();
+      }));
+
+  // N.hitTest(rootId, x, y) → deepest node id containing (x,y), or -1
+  obj.setProperty(rt, "hitTest",
+    jsi::Function::createFromHostFunction(rt,
+      jsi::PropNameID::forAscii(rt,"hitTest"),3,
+      [&nodes](jsi::Runtime& rt,const jsi::Value&,
+               const jsi::Value* a,size_t n)->jsi::Value{
+        if (n < 3) return jsi::Value(-1);
+        int rid  = (int)a[0].asNumber();
+        double tx = a[1].asNumber();
+        double ty = a[2].asNumber();
+        auto it = nodes.find(rid);
+        if (it == nodes.end()) return jsi::Value(-1);
+
+        int found = -1;
+        std::function<void(RNNode*, float, float)> walk =
+          [&](RNNode* node, float ox, float oy) {
+            float x = ox + YGNodeLayoutGetLeft(node->yoga);
+            float y = oy + YGNodeLayoutGetTop(node->yoga);
+            float w = YGNodeLayoutGetWidth(node->yoga);
+            float h = YGNodeLayoutGetHeight(node->yoga);
+            if (tx < x || tx >= x + w || ty < y || ty >= y + h) return;
+            found = node->id;
+            for (auto& c : node->children) walk(c.get(), x, y);
+          };
+        walk(it->second.get(), 0, 0);
+        return jsi::Value(found);
       }));
 
   // N.commit(rootId) — layout + render
@@ -269,7 +299,11 @@ int main(int argc, char* argv[]) {
 
   QGuiApplication app(argc, argv);
   auto* fp  = new FrameProvider();
-  auto* scr = new Screen(1404, 1872, fp, &app);
+  QSize screenSize = QGuiApplication::primaryScreen()->size();
+  int sw = screenSize.width()  > 0 ? screenSize.width()  : 1404;
+  int sh = screenSize.height() > 0 ? screenSize.height() : 1872;
+  qDebug() << "[host] screen" << sw << "x" << sh;
+  auto* scr = new Screen(sw, sh, fp, &app);
 
   std::ifstream file(argv[1]);
   std::ostringstream ss; ss << file.rdbuf();

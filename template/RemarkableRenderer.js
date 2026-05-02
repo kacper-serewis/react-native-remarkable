@@ -53,6 +53,9 @@ function childrenToText(children) {
   return "";
 }
 
+// id → instance, used by hit testing to walk up from the touched node
+const _byId = new Map();
+
 // ── Instance ──────────────────────────────────────────────────────
 function createInstance(type, props) {
   const style = props.style || {};
@@ -66,7 +69,9 @@ function createInstance(type, props) {
   }
 
   const id = N.createNode(isText ? "text" : "view", nProps);
-  return { id, type, props, children: [] };
+  const instance = { id, type, props, children: [], parent: null };
+  _byId.set(id, instance);
+  return instance;
 }
 
 // ── Reconciler host config ────────────────────────────────────────
@@ -105,40 +110,49 @@ const hostConfig = {
       fontSize: 24,
       color: "#000000",
     });
-    return { id, type: "text", props: {}, children: [] };
+    const instance = { id, type: "text", props: {}, children: [], parent: null };
+    _byId.set(id, instance);
+    return instance;
   },
 
   appendInitialChild(parent, child) {
     N.appendChild(parent.id, child.id);
     parent.children.push(child);
+    child.parent = parent;
   },
 
   appendChild(parent, child) {
     N.appendChild(parent.id, child.id);
     parent.children.push(child);
+    child.parent = parent;
   },
 
   appendChildToContainer(container, child) {
     container.children.push(child);
     container.rootId = child.id;
+    child.parent = null;
   },
 
   insertBefore(parent, child) {
     N.appendChild(parent.id, child.id);
     parent.children.push(child);
+    child.parent = parent;
   },
 
   insertInContainerBefore(container, child) {
     container.children.push(child);
     container.rootId = child.id;
+    child.parent = null;
   },
 
   removeChild(parent, child) {
     parent.children = parent.children.filter((c) => c !== child);
+    _byId.delete(child.id);
   },
 
   removeChildFromContainer(container, child) {
     container.children = container.children.filter((c) => c !== child);
+    _byId.delete(child.id);
   },
 
   // reconciler 0.33: (instance, type, oldProps, newProps, finishedWork)
@@ -245,15 +259,17 @@ const hostConfig = {
 const reconciler = ReactReconciler(hostConfig);
 
 // ── Touch hit test ────────────────────────────────────────────────
-function hitTest(node) {
-  if (!node) return false;
-  const press = node.props && (node.props.onPress || node.props.onClick);
-  if (press) {
-    press();
-    return true;
-  }
-  for (const child of node.children || []) {
-    if (hitTest(child)) return true;
+// Native side returns the deepest-matching node id. We then bubble up
+// firing the first node with onPress (event bubbling, like the DOM).
+function fireAt(id) {
+  let node = _byId.get(id);
+  while (node) {
+    const press = node.props && (node.props.onPress || node.props.onClick);
+    if (press) {
+      try { press(); } catch (e) { console.error("onPress error:", e); }
+      return true;
+    }
+    node = node.parent;
   }
   return false;
 }
@@ -291,8 +307,9 @@ export function render(element) {
 }
 
 // Wire touch events
-global.__rmTouchDown = function () {
-  if (!_container) return;
-  for (const child of _container.children) hitTest(child);
+global.__rmTouchDown = function (x, y) {
+  if (!_container || _container.rootId === undefined) return;
+  const id = N.hitTest(_container.rootId, x, y);
+  if (id !== -1) fireAt(id);
 };
 global.__rmTouchUp = function () {};
