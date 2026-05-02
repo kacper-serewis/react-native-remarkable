@@ -1,0 +1,25 @@
+#!/bin/bash
+set -e
+
+DEVICE=${1:-192.168.1.196}
+
+echo "=== Bundling + deploying JS only ==="
+
+cd template
+npx react-native bundle \
+  --platform android \
+  --dev false \
+  --entry-file index.js \
+  --bundle-output ../dist/remarkable.bundle.js \
+  --reset-cache
+cd ..
+
+scp dist/remarkable.bundle.js root@$DEVICE:~/rn-app/remarkable.bundle.js
+
+ssh root@$DEVICE "
+  kill \$(ps | grep rn-layout | grep -v grep | awk '{print \$1}') 2>/dev/null || true
+  kill \$(ps | grep xochitl | grep -v grep | awk '{print \$1}') 2>/dev/null || true
+  LD_LIBRARY_PATH=~/hermes-host \
+  QT_QUICK_BACKEND=epaper \
+  ~/rn-app/rn-layout ~/rn-app/remarkable.bundle.js -platform epaper
+"
