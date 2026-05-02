@@ -56,6 +56,15 @@ function childrenToText(children) {
 // id → instance, used by hit testing to walk up from the touched node
 const _byId = new Map();
 
+// Drop a node and all its descendants from the id map. Called when a
+// subtree is removed so we don't keep dead instances live for hit
+// testing.
+function detachSubtree(node) {
+  if (!node) return;
+  for (const c of node.children || []) detachSubtree(c);
+  _byId.delete(node.id);
+}
+
 // ── Instance ──────────────────────────────────────────────────────
 function createInstance(type, props) {
   const style = props.style || {};
@@ -147,12 +156,14 @@ const hostConfig = {
 
   removeChild(parent, child) {
     parent.children = parent.children.filter((c) => c !== child);
-    _byId.delete(child.id);
+    detachSubtree(child);
+    N.removeChild(parent.id, child.id);
   },
 
   removeChildFromContainer(container, child) {
     container.children = container.children.filter((c) => c !== child);
-    _byId.delete(child.id);
+    detachSubtree(child);
+    N.destroyNode(child.id);
   },
 
   // reconciler 0.33: (instance, type, oldProps, newProps, finishedWork)
@@ -205,7 +216,14 @@ const hostConfig = {
     );
   },
 
-  clearContainer() {},
+  clearContainer(container) {
+    for (const child of container.children) {
+      detachSubtree(child);
+      N.destroyNode(child.id);
+    }
+    container.children = [];
+    container.rootId = undefined;
+  },
   hideInstance() {},
   unhideInstance() {},
   hideTextInstance() {},

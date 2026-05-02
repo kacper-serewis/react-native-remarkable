@@ -103,6 +103,42 @@ E-ink display (reMarkable Paper Pro)## Device setup
 2. Find your device IP: Settings → Wi-Fi → tap network
 3. Connect: `ssh root@<ip>`
 
+## Roadmap / TODO
+
+### Renderer hardening
+- [ ] **Prop removal on update.** `applyProps` only sets values; if a re-render drops a prop (e.g. `backgroundColor`) the native node keeps the old value. Diff `oldProps` vs `newProps` in `commitUpdate` and reset cleared fields.
+- [ ] **Memory leaks.** `removeChild` filters from JS but the native `nodes` map and Yoga tree grow forever. Add `N.removeChild(parentId, childId)` and `N.destroyNode(id)` and call them from JS `removeChild` / `removeChildFromContainer`.
+- [ ] **`clearContainer`.** Currently a no-op. Will silently break when an app calls `render(null)` or fully unmounts.
+- [ ] **More style props.** `flexWrap`, `position: 'absolute'` + `top`/`left`/`right`/`bottom`, `alignSelf`, `gap`, `aspectRatio`, `opacity`. Mostly one line each in `applyProps`.
+- [ ] **Touch up + long-press.** `__rmTouchUp` is a no-op. Wire `onPressOut` and add long-press detection in JS via `setTimeout`.
+
+### E-paper specific
+- [x] ~~Partial refresh.~~ Already happening — the reMarkable epaper QPA backend diffs framebuffers and only drives waveform updates for changed regions. We repaint the full `QImage` each commit; the driver slices it for us.
+- [ ] **Refresh-mode hints per node.** `refreshMode="fast" | "quality"` prop to choose A2 (fast, mono) vs GC16 (quality) waveforms. Critical for animations vs. static text.
+- [ ] **Pen / stylus input.** Paper Pro has a Wacom digitizer; we currently only handle finger touch via `MouseArea`. Read pen evdev events and expose a JS gesture stream.
+
+### Component library
+- [ ] **`Pressable`** with proper press/release visual states (current `TouchableOpacity` doesn't even change opacity).
+- [ ] **`ScrollView`** — Yoga `overflow: scroll`, scroll state in JS, clip rect in `paintNode`.
+- [ ] **`TextInput`** — wire the on-device keyboard (`epaperkeyboardhandler` is already loaded — see boot logs) and a host-side text-input model.
+- [ ] **`Image`** — load PNG/JPEG via Qt and paint into a node's bounds.
+
+### Developer experience
+- [ ] **Hot reload.** Add a `__rmReload(source)` JSI host function and a tiny client in `dev.sh` that watches `dist/remarkable.bundle.js` and pushes it over the existing SSH session — kill `scp` + restart loop.
+- [ ] **Source maps.** Bundle with `--sourcemap-output` and translate stack frames in the host's error logger. Today every JS error reports `bundle.js:20:NNN`.
+- [ ] **Public package.** Promote `template/components.js` and `template/RemarkableRenderer.js` into a published `react-remarkable` package so apps can `npm install` instead of copying the template.
+- [ ] **TypeScript types.** Ship `.d.ts` for the host components and the `N.*` JSI surface.
+
+### Build / deploy polish
+- [ ] **Strip `rn-layout`.** Binary is ~330 KB; `strip` cuts that significantly.
+- [ ] **`.watchmanconfig`.** Suppresses the harmless Metro warning each bundle.
+- [ ] Document the JS-only fast path (`dev.sh`) more prominently.
+
+### Bigger swings
+- [ ] **Drop QML.** The `QQmlApplicationEngine` exists only to display one `Image`. Blit the `QImage` directly to `/dev/fb0` to shrink the binary, drop dependencies, and speed up startup.
+- [ ] **Concurrent React.** Switch `createContainer` from `tag: 0` (LegacyRoot) to `tag: 1` (ConcurrentRoot) to enable Suspense, transitions, and `useDeferredValue`. The scheduler polyfills already support it.
+- [ ] **`requestAnimationFrame`** driven by a 10–15 Hz `QTimer` for the cases where animation makes sense on e-paper (drag handles, sliders).
+
 ## Acknowledgements
 
 Built on [Hermes](https://hermesengine.dev),

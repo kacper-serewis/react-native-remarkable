@@ -255,6 +255,61 @@ static void wire(jsi::Runtime& rt, Screen* scr,
         return jsi::Value(found);
       }));
 
+  // N.removeChild(parentId, childId) — detach child from parent's Yoga
+  // tree and from the parent's children vector, then drop the subtree
+  // from the nodes registry. shared_ptr destruction cascades into
+  // RNNode::~RNNode which calls YGNodeFree.
+  obj.setProperty(rt, "removeChild",
+    jsi::Function::createFromHostFunction(rt,
+      jsi::PropNameID::forAscii(rt,"removeChild"),2,
+      [&nodes](jsi::Runtime&,const jsi::Value&,
+               const jsi::Value* a,size_t n)->jsi::Value{
+        if (n < 2) return jsi::Value::undefined();
+        int pid = (int)a[0].asNumber();
+        int cid = (int)a[1].asNumber();
+        auto cIt = nodes.find(cid);
+        if (cIt == nodes.end()) return jsi::Value::undefined();
+        auto child = cIt->second;
+        auto pIt = nodes.find(pid);
+        if (pIt != nodes.end()) {
+          auto& parent = pIt->second;
+          YGNodeRemoveChild(parent->yoga, child->yoga);
+          for (auto it = parent->children.begin();
+               it != parent->children.end(); ) {
+            if (*it == child) it = parent->children.erase(it);
+            else ++it;
+          }
+        }
+        std::function<void(RNNode*)> eraseSubtree = [&](RNNode* node) {
+          for (auto& c : node->children) eraseSubtree(c.get());
+          nodes.erase(node->id);
+        };
+        eraseSubtree(child.get());
+        return jsi::Value::undefined();
+      }));
+
+  // N.destroyNode(id) — drop a root-level node (one not attached to a
+  // parent in our registry, e.g. removed from the container).
+  obj.setProperty(rt, "destroyNode",
+    jsi::Function::createFromHostFunction(rt,
+      jsi::PropNameID::forAscii(rt,"destroyNode"),1,
+      [&nodes](jsi::Runtime&,const jsi::Value&,
+               const jsi::Value* a,size_t n)->jsi::Value{
+        if (n < 1) return jsi::Value::undefined();
+        int id = (int)a[0].asNumber();
+        auto it = nodes.find(id);
+        if (it == nodes.end()) return jsi::Value::undefined();
+        auto node = it->second;
+        YGNodeRef yp = YGNodeGetParent(node->yoga);
+        if (yp) YGNodeRemoveChild(yp, node->yoga);
+        std::function<void(RNNode*)> eraseSubtree = [&](RNNode* n2) {
+          for (auto& c : n2->children) eraseSubtree(c.get());
+          nodes.erase(n2->id);
+        };
+        eraseSubtree(node.get());
+        return jsi::Value::undefined();
+      }));
+
   // N.commit(rootId) — layout + render
   obj.setProperty(rt, "commit",
     jsi::Function::createFromHostFunction(rt,
