@@ -12,7 +12,11 @@ fi
 echo "=== Deploying to $DEVICE ==="
 
 echo "[1/3] Copying binaries..."
-ssh root@$DEVICE "mkdir -p ~/hermes-host ~/rn-app"
+ssh root@$DEVICE "
+  mkdir -p ~/hermes-host ~/rn-app
+  kill \$(ps | grep rn-layout | grep -v grep | awk '{print \$1}') 2>/dev/null || true
+  rm -f ~/rn-app/rn-layout ~/hermes-host/libhermesvm.so
+"
 scp $DIST/rn-layout root@$DEVICE:~/rn-app/rn-layout
 scp $DIST/libhermesvm.so root@$DEVICE:~/hermes-host/libhermesvm.so
 ssh root@$DEVICE "chmod +x ~/rn-app/rn-layout"

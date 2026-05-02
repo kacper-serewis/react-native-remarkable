@@ -1,20 +1,11 @@
-// Lightweight component stubs for reMarkable renderer
-// These work with JSX via React.createElement
+// Host element identifiers for the reMarkable renderer.
+// JSX (<View />) becomes React.createElement(View, ...). We want it to
+// become createElement('view', ...) so the reconciler's createInstance
+// receives the right type string.
 
-export const View = (props) => ({
-  type: 'view',
-  props,
-});
-
-export const Text = (props) => ({
-  type: 'text',
-  props,
-});
-
-export const TouchableOpacity = (props) => ({
-  type: 'view',
-  props,
-});
+export const View = 'view';
+export const Text = 'text';
+export const TouchableOpacity = 'view';
 
 export const StyleSheet = {
   create: (styles) => styles,

@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QObject>
 #include <QDebug>
+#include <QTimer>
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
@@ -35,6 +36,7 @@ public:
   Screen(int w, int h, FrameProvider* fp, QObject* parent=nullptr)
     : QObject(parent), m_image(w,h,QImage::Format_ARGB32), m_fp(fp) {
     m_image.fill(Qt::white);
+    m_fp->setImage(m_image);
   }
 
   Q_INVOKABLE void touchDown(double x, double y) {
@@ -88,6 +90,80 @@ static double getNum(jsi::Runtime& rt, const jsi::Object& o,
 using NodeMap = std::unordered_map<int, std::shared_ptr<RNNode>>;
 static int nextId = 1;
 
+// Apply a JS props object to an RNNode. Used by both createNode (initial)
+// and updateNode (commit-time mutation). Only props present on the JS
+// object overwrite existing values, so updates don't silently reset
+// fields the caller didn't provide.
+static void applyProps(jsi::Runtime& rt, RNNode* node, const jsi::Object& props) {
+  // Dimensions
+  if (props.hasProperty(rt, "width"))
+    YGNodeStyleSetWidth(node->yoga, props.getProperty(rt, "width").asNumber());
+  if (props.hasProperty(rt, "height"))
+    YGNodeStyleSetHeight(node->yoga, props.getProperty(rt, "height").asNumber());
+  if (props.hasProperty(rt, "flex"))
+    YGNodeStyleSetFlex(node->yoga, props.getProperty(rt, "flex").asNumber());
+
+  if (props.hasProperty(rt, "flexDirection")) {
+    std::string fd = str(rt, props.getProperty(rt, "flexDirection"));
+    YGNodeStyleSetFlexDirection(node->yoga,
+      fd == "row" ? YGFlexDirectionRow : YGFlexDirectionColumn);
+  }
+  if (props.hasProperty(rt, "justifyContent")) {
+    std::string jc = str(rt, props.getProperty(rt, "justifyContent"));
+    if (jc == "center")        YGNodeStyleSetJustifyContent(node->yoga, YGJustifyCenter);
+    else if (jc == "space-between") YGNodeStyleSetJustifyContent(node->yoga, YGJustifySpaceBetween);
+    else if (jc == "space-around")  YGNodeStyleSetJustifyContent(node->yoga, YGJustifySpaceAround);
+    else if (jc == "flex-end")      YGNodeStyleSetJustifyContent(node->yoga, YGJustifyFlexEnd);
+    else if (jc == "flex-start")    YGNodeStyleSetJustifyContent(node->yoga, YGJustifyFlexStart);
+  }
+  if (props.hasProperty(rt, "alignItems")) {
+    std::string ai = str(rt, props.getProperty(rt, "alignItems"));
+    if (ai == "center")    YGNodeStyleSetAlignItems(node->yoga, YGAlignCenter);
+    else if (ai == "flex-end")  YGNodeStyleSetAlignItems(node->yoga, YGAlignFlexEnd);
+    else if (ai == "stretch")   YGNodeStyleSetAlignItems(node->yoga, YGAlignStretch);
+    else if (ai == "flex-start") YGNodeStyleSetAlignItems(node->yoga, YGAlignFlexStart);
+  }
+
+  // Padding
+  if (props.hasProperty(rt, "padding"))
+    YGNodeStyleSetPadding(node->yoga, YGEdgeAll, props.getProperty(rt, "padding").asNumber());
+  if (props.hasProperty(rt, "paddingTop"))
+    YGNodeStyleSetPadding(node->yoga, YGEdgeTop, props.getProperty(rt, "paddingTop").asNumber());
+  if (props.hasProperty(rt, "paddingBottom"))
+    YGNodeStyleSetPadding(node->yoga, YGEdgeBottom, props.getProperty(rt, "paddingBottom").asNumber());
+  if (props.hasProperty(rt, "paddingLeft"))
+    YGNodeStyleSetPadding(node->yoga, YGEdgeLeft, props.getProperty(rt, "paddingLeft").asNumber());
+  if (props.hasProperty(rt, "paddingRight"))
+    YGNodeStyleSetPadding(node->yoga, YGEdgeRight, props.getProperty(rt, "paddingRight").asNumber());
+
+  // Margin
+  if (props.hasProperty(rt, "margin"))
+    YGNodeStyleSetMargin(node->yoga, YGEdgeAll, props.getProperty(rt, "margin").asNumber());
+  if (props.hasProperty(rt, "marginTop"))
+    YGNodeStyleSetMargin(node->yoga, YGEdgeTop, props.getProperty(rt, "marginTop").asNumber());
+  if (props.hasProperty(rt, "marginBottom"))
+    YGNodeStyleSetMargin(node->yoga, YGEdgeBottom, props.getProperty(rt, "marginBottom").asNumber());
+
+  // Visual
+  if (props.hasProperty(rt, "backgroundColor"))
+    node->backgroundColor = QColor(QString::fromStdString(
+      str(rt, props.getProperty(rt, "backgroundColor"))));
+  if (props.hasProperty(rt, "color"))
+    node->color = QColor(QString::fromStdString(
+      str(rt, props.getProperty(rt, "color"))));
+  if (props.hasProperty(rt, "text"))
+    node->text = str(rt, props.getProperty(rt, "text"));
+  if (props.hasProperty(rt, "fontSize"))
+    node->fontSize = (int)props.getProperty(rt, "fontSize").asNumber();
+  if (props.hasProperty(rt, "borderRadius"))
+    node->borderRadius = (int)props.getProperty(rt, "borderRadius").asNumber();
+  if (props.hasProperty(rt, "borderWidth"))
+    node->borderWidth = (float)props.getProperty(rt, "borderWidth").asNumber();
+  if (props.hasProperty(rt, "borderColor"))
+    node->borderColor = QColor(QString::fromStdString(
+      str(rt, props.getProperty(rt, "borderColor"))));
+}
+
 // ── Wire JSI ─────────────────────────────────────────────────────
 struct TouchCB {
   std::shared_ptr<jsi::Function> onTouchDown;
@@ -109,78 +185,28 @@ static void wire(jsi::Runtime& rt, Screen* scr,
                const jsi::Value* a,size_t n)->jsi::Value{
         std::string type = a[0].toString(rt).utf8(rt);
         auto node = std::make_shared<RNNode>(type);
-        YGConfigRef cfg = YGConfigNew();
-
         if (n > 1 && a[1].isObject()) {
           auto props = a[1].getObject(rt);
-
-          // Dimensions
-          double w = getNum(rt,props,"width",-1);
-          double h = getNum(rt,props,"height",-1);
-          double flex = getNum(rt,props,"flex",-1);
-          if (w >= 0)   YGNodeStyleSetWidth(node->yoga, w);
-          if (h >= 0)   YGNodeStyleSetHeight(node->yoga, h);
-          if (flex >= 0) YGNodeStyleSetFlex(node->yoga, flex);
-
-          // Flex layout
-          std::string fd = getProp(rt,props,"flexDirection","column");
-          YGNodeStyleSetFlexDirection(node->yoga,
-            fd == "row" ? YGFlexDirectionRow : YGFlexDirectionColumn);
-
-          std::string jc = getProp(rt,props,"justifyContent","");
-          if (jc == "center")        YGNodeStyleSetJustifyContent(node->yoga, YGJustifyCenter);
-          if (jc == "space-between") YGNodeStyleSetJustifyContent(node->yoga, YGJustifySpaceBetween);
-          if (jc == "space-around")  YGNodeStyleSetJustifyContent(node->yoga, YGJustifySpaceAround);
-          if (jc == "flex-end")      YGNodeStyleSetJustifyContent(node->yoga, YGJustifyFlexEnd);
-
-          std::string ai = getProp(rt,props,"alignItems","");
-          if (ai == "center")    YGNodeStyleSetAlignItems(node->yoga, YGAlignCenter);
-          if (ai == "flex-end")  YGNodeStyleSetAlignItems(node->yoga, YGAlignFlexEnd);
-          if (ai == "stretch")   YGNodeStyleSetAlignItems(node->yoga, YGAlignStretch);
-
-          // Padding / margin
-          double p  = getNum(rt,props,"padding",   -1);
-          double ph = getNum(rt,props,"paddingH",  -1);
-          double pv = getNum(rt,props,"paddingV",  -1);
-          double pt = getNum(rt,props,"paddingTop",-1);
-          double pb = getNum(rt,props,"paddingBottom",-1);
-          double pl = getNum(rt,props,"paddingLeft",-1);
-          double pr = getNum(rt,props,"paddingRight",-1);
-          if (p  >= 0) YGNodeStyleSetPadding(node->yoga, YGEdgeAll,    p);
-          if (ph >= 0) { YGNodeStyleSetPadding(node->yoga,YGEdgeLeft,ph);
-                         YGNodeStyleSetPadding(node->yoga,YGEdgeRight,ph); }
-          if (pv >= 0) { YGNodeStyleSetPadding(node->yoga,YGEdgeTop,pv);
-                         YGNodeStyleSetPadding(node->yoga,YGEdgeBottom,pv); }
-          if (pt >= 0) YGNodeStyleSetPadding(node->yoga, YGEdgeTop,    pt);
-          if (pb >= 0) YGNodeStyleSetPadding(node->yoga, YGEdgeBottom, pb);
-          if (pl >= 0) YGNodeStyleSetPadding(node->yoga, YGEdgeLeft,   pl);
-          if (pr >= 0) YGNodeStyleSetPadding(node->yoga, YGEdgeRight,  pr);
-
-          double mg = getNum(rt,props,"margin",-1);
-          double mt = getNum(rt,props,"marginTop",-1);
-          double mb = getNum(rt,props,"marginBottom",-1);
-          if (mg >= 0) YGNodeStyleSetMargin(node->yoga, YGEdgeAll,    mg);
-          if (mt >= 0) YGNodeStyleSetMargin(node->yoga, YGEdgeTop,    mt);
-          if (mb >= 0) YGNodeStyleSetMargin(node->yoga, YGEdgeBottom, mb);
-
-          // Visual
-          std::string bg = getProp(rt,props,"backgroundColor","");
-          if (!bg.empty()) node->backgroundColor = QColor(QString::fromStdString(bg));
-
-          std::string col = getProp(rt,props,"color","#000000");
-          node->color = QColor(QString::fromStdString(col));
-
-          node->text      = getProp(rt,props,"text","");
-          node->fontSize  = (int)getNum(rt,props,"fontSize",24);
-          node->borderRadius = (int)getNum(rt,props,"borderRadius",0);
-          node->borderWidth  = (float)getNum(rt,props,"borderWidth",0);
-          std::string bc  = getProp(rt,props,"borderColor","");
-          if (!bc.empty()) node->borderColor = QColor(QString::fromStdString(bc));
+          applyProps(rt, node.get(), props);
         }
-
         int id = nextId++;
         nodes[id] = node;
         return jsi::Value(id);
+      }));
+
+  // N.updateNode(id, props) — apply prop diffs to an existing node
+  obj.setProperty(rt, "updateNode",
+    jsi::Function::createFromHostFunction(rt,
+      jsi::PropNameID::forAscii(rt,"updateNode"),2,
+      [&nodes](jsi::Runtime& rt,const jsi::Value&,
+               const jsi::Value* a,size_t n)->jsi::Value{
+        if (n < 2 || !a[0].isNumber() || !a[1].isObject())
+          return jsi::Value::undefined();
+        int id = (int)a[0].asNumber();
+        auto it = nodes.find(id);
+        if (it == nodes.end()) return jsi::Value::undefined();
+        applyProps(rt, it->second.get(), a[1].getObject(rt));
+        return jsi::Value::undefined();
       }));
 
   // N.appendChild(parentId, childId)
@@ -268,8 +294,17 @@ int main(int argc, char* argv[]) {
         if (global.hasProperty(*runtime, "__rmTouchDown")) {
           auto fn = global.getPropertyAsFunction(*runtime, "__rmTouchDown");
           fn.call(*runtime, jsi::Value(x), jsi::Value(y));
+        } else {
+          qWarning() << "[touch] __rmTouchDown not set on global";
         }
-      } catch(...) {}
+      } catch (const jsi::JSError& e) {
+        qWarning() << "[touch] JS error:" << e.getMessage().c_str();
+        qWarning() << "Stack:" << e.getStack().c_str();
+      } catch (const std::exception& e) {
+        qWarning() << "[touch] C++ error:" << e.what();
+      } catch (...) {
+        qWarning() << "[touch] unknown error";
+      }
     });
   QObject::connect(scr, &Screen::released,
     [&]() {
@@ -332,6 +367,113 @@ int main(int argc, char* argv[]) {
     var nativeModuleProxy = TurboModuleRegistry;
   )"), "globals");
 
+  // ── Timers (setTimeout / setInterval / clearTimeout / clearInterval) ──
+  struct TimerEntry {
+    QTimer* timer;
+    std::shared_ptr<jsi::Function> callback;
+    bool repeat;
+  };
+  auto timers = std::make_shared<std::unordered_map<int, TimerEntry>>();
+  auto nextTimerId = std::make_shared<int>(1);
+
+  auto installTimer = [&](const char* name, bool repeat) {
+    runtime->global().setProperty(*runtime, name,
+      jsi::Function::createFromHostFunction(*runtime,
+        jsi::PropNameID::forAscii(*runtime, name), 2,
+        [&runtime, timers, nextTimerId, repeat]
+        (jsi::Runtime& rt, const jsi::Value&,
+         const jsi::Value* a, size_t n) -> jsi::Value {
+          if (n < 1 || !a[0].isObject() || !a[0].getObject(rt).isFunction(rt))
+            return jsi::Value::undefined();
+          auto cb = std::make_shared<jsi::Function>(
+            a[0].getObject(rt).asFunction(rt));
+          int delay = (n > 1 && a[1].isNumber()) ? (int)a[1].asNumber() : 0;
+          if (delay < 0) delay = 0;
+          int id = (*nextTimerId)++;
+          QTimer* t = new QTimer();
+          t->setSingleShot(!repeat);
+          t->setInterval(delay);
+          (*timers)[id] = TimerEntry{t, cb, repeat};
+          QObject::connect(t, &QTimer::timeout,
+            [&runtime, timers, id]() {
+              auto it = timers->find(id);
+              if (it == timers->end()) return;
+              auto cb = it->second.callback;
+              bool repeat = it->second.repeat;
+              try { cb->call(*runtime); }
+              catch (const jsi::JSError& e) {
+                qWarning() << "Timer JS error:" << e.getMessage().c_str();
+                qWarning() << "Stack:" << e.getStack().c_str();
+              } catch (const std::exception& e) {
+                qWarning() << "Timer C++ error:" << e.what();
+              } catch (...) {
+                qWarning() << "Timer unknown error";
+              }
+              if (!repeat) {
+                auto it2 = timers->find(id);
+                if (it2 != timers->end()) {
+                  it2->second.timer->deleteLater();
+                  timers->erase(it2);
+                }
+              }
+            });
+          t->start();
+          return jsi::Value(id);
+        }));
+  };
+
+  auto installClear = [&](const char* name) {
+    runtime->global().setProperty(*runtime, name,
+      jsi::Function::createFromHostFunction(*runtime,
+        jsi::PropNameID::forAscii(*runtime, name), 1,
+        [timers](jsi::Runtime&, const jsi::Value&,
+                 const jsi::Value* a, size_t n) -> jsi::Value {
+          if (n < 1 || !a[0].isNumber()) return jsi::Value::undefined();
+          int id = (int)a[0].asNumber();
+          auto it = timers->find(id);
+          if (it != timers->end()) {
+            it->second.timer->stop();
+            it->second.timer->deleteLater();
+            timers->erase(it);
+          }
+          return jsi::Value::undefined();
+        }));
+  };
+
+  installTimer("setTimeout",  false);
+  installTimer("setInterval", true);
+  installClear("clearTimeout");
+  installClear("clearInterval");
+
+  // setImmediate / clearImmediate + minimal MessageChannel polyfill
+  // (React's scheduler uses MessageChannel to yield between work units.)
+  runtime->evaluateJavaScript(std::make_unique<jsi::StringBuffer>(R"(
+    globalThis.setImmediate = function(fn) {
+      var args = Array.prototype.slice.call(arguments, 1);
+      return setTimeout(function() { fn.apply(null, args); }, 0);
+    };
+    globalThis.clearImmediate = function(id) { clearTimeout(id); };
+    globalThis.queueMicrotask = globalThis.queueMicrotask || function(fn) {
+      Promise.resolve().then(fn).catch(function(e){
+        setTimeout(function(){ throw e; }, 0);
+      });
+    };
+    globalThis.MessageChannel = function MessageChannel() {
+      var port1 = { onmessage: null };
+      var port2 = {
+        postMessage: function() {
+          setTimeout(function() {
+            if (typeof port1.onmessage === 'function') {
+              try { port1.onmessage({ data: null }); } catch (e) {}
+            }
+          }, 0);
+        }
+      };
+      this.port1 = port1;
+      this.port2 = port2;
+    };
+  )"), "polyfills");
+
   wire(*runtime, scr, nodes, tcb);
 
   try {
@@ -339,7 +481,9 @@ int main(int argc, char* argv[]) {
       std::make_unique<jsi::StringBuffer>(source), argv[1]);
     qDebug() << "[host] Bundle executed";
   } catch(const jsi::JSError& e) {
-    qWarning() << "JS Error:" << e.getMessage().c_str(); return 1;
+    qWarning() << "JS Error:" << e.getMessage().c_str();
+    qWarning() << "Stack:" << e.getStack().c_str();
+    return 1;
   }
 
 
