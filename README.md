@@ -29,7 +29,7 @@ Each tagged release publishes a pre-built `react-native-remarkable-vX.Y.Z.tar.gz
 
 ```sh
 ssh root@<device-ip> '
-  curl -sSL https://github.com/<owner>/<repo>/releases/latest/download/react-native-remarkable-vLATEST.tar.gz \
+  curl -sSL https://github.com/kacper-serewis/react-native-remarkable/releases/latest/download/react-native-remarkable-vLATEST.tar.gz \
     | tar xz -C /tmp \
   && /tmp/react-native-remarkable-vLATEST/install.sh
 '
@@ -37,7 +37,7 @@ ssh root@<device-ip> '
 
 **Or manually:**
 
-1. Download the release tarball from the [Releases page](https://github.com/<owner>/<repo>/releases).
+1. Download the release tarball from the [Releases page](https://github.com/kacper-serewis/react-native-remarkable/releases).
 2. `scp react-native-remarkable-*.tar.gz root@<ip>:/tmp/` and `ssh` into the device.
 3. `cd /tmp && tar xzf react-native-remarkable-*.tar.gz && cd react-native-remarkable-* && ./install.sh`
 4. Launch the app: `~/rn-app/start.sh`
