@@ -2,7 +2,6 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# ── Dependencies ──────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y \
   git cmake ninja-build python3 python3-pip \
   build-essential patchelf pkg-config \
@@ -21,7 +20,7 @@ RUN cmake -S /hermes -B /hermes/build \
   -DHERMES_BUILD_SHARED_JSI=OFF \
   -DHERMES_ENABLE_INTL=OFF \
   -DHERMES_ENABLE_DEBUGGER=OFF && \
-  cmake --build /hermes/build --target hermes jsi -j$(nproc)
+  cmake --build /hermes/build --target hermes hermesvm jsi -j$(nproc)
 
 # ── Build Yoga ────────────────────────────────────────────────────
 RUN git clone https://github.com/facebook/yoga.git /yoga && \
@@ -31,16 +30,15 @@ RUN git clone https://github.com/facebook/yoga.git /yoga && \
   -DBUILD_SHARED_LIBS=OFF && \
   cmake --build /yoga/build -j$(nproc)
 
-# ── Copy host source ──────────────────────────────────────────────
+# ── Build host ────────────────────────────────────────────────────
 COPY host/ /rn_host/
 
-# ── Build host ────────────────────────────────────────────────────
 RUN cmake -S /rn_host -B /rn_host/build \
   -G Ninja \
   -DCMAKE_BUILD_TYPE=Release && \
   cmake --build /rn_host/build
 
-# ── Bundle output ─────────────────────────────────────────────────
+# ── Collect output ────────────────────────────────────────────────
 RUN mkdir -p /output && \
   cp /rn_host/build/rn-layout /output/rn-layout && \
   cp /hermes/build/lib/libhermesvm.so /output/libhermesvm.so && \
