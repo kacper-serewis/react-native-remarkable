@@ -21,6 +21,29 @@ Write React apps in JSX and run them on your reMarkable Paper Pro.
 - Node.js 18+
 - macOS or Linux host
 
+## Install a release (no build required)
+
+Each tagged release publishes a pre-built `react-native-remarkable-vX.Y.Z.tar.gz` containing the ARM64 binary, the Hermes runtime, the JS bundle, and an installer.
+
+**One-liner from the device** (the Paper Pro needs SSH and Wi-Fi):
+
+```sh
+ssh root@<device-ip> '
+  curl -sSL https://github.com/<owner>/<repo>/releases/latest/download/react-native-remarkable-vLATEST.tar.gz \
+    | tar xz -C /tmp \
+  && /tmp/react-native-remarkable-vLATEST/install.sh
+'
+```
+
+**Or manually:**
+
+1. Download the release tarball from the [Releases page](https://github.com/<owner>/<repo>/releases).
+2. `scp react-native-remarkable-*.tar.gz root@<ip>:/tmp/` and `ssh` into the device.
+3. `cd /tmp && tar xzf react-native-remarkable-*.tar.gz && cd react-native-remarkable-* && ./install.sh`
+4. Launch the app: `~/rn-app/start.sh`
+
+`start.sh` stops `xochitl` (the default reMarkable UI) so we can take over the screen. To restore xochitl: reboot, or `systemctl start xochitl`.
+
 ## Quick Start
 
 ```bash

@@ -1,0 +1,121 @@
+name: Build & release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build arm64 binary + JS bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: template/package-lock.json
+
+      - name: Build C++ host (linux/arm64) with layer cache
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/arm64
+          tags: react-native-remarkable:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract host binaries
+        run: |
+          mkdir -p dist
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD/dist:/out" \
+            react-native-remarkable:ci \
+            sh -c "cp /output/rn-layout /out/rn-layout && cp /output/libhermesvm.so /out/libhermesvm.so"
+          ls -lh dist/
+
+      - name: Install JS deps
+        working-directory: template
+        run: npm ci
+
+      - name: Bundle JS
+        working-directory: template
+        run: |
+          npx react-native bundle \
+            --platform android \
+            --dev false \
+            --entry-file index.js \
+            --bundle-output ../dist/remarkable.bundle.js \
+            --sourcemap-output ../dist/remarkable.bundle.js.map \
+            --reset-cache
+
+      - name: Stage release tree
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "main" ]; then
+            VERSION="dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+          STAGE="release/react-native-remarkable-$VERSION"
+          mkdir -p "$STAGE"
+          cp dist/rn-layout                    "$STAGE/"
+          cp dist/libhermesvm.so               "$STAGE/"
+          cp dist/remarkable.bundle.js         "$STAGE/"
+          cp dist/remarkable.bundle.js.map     "$STAGE/"
+          cp scripts/install-on-device.sh      "$STAGE/install.sh"
+          cp scripts/start-on-device.sh        "$STAGE/start.sh"
+          chmod +x "$STAGE/rn-layout" "$STAGE/install.sh" "$STAGE/start.sh"
+
+          ( cd release && tar czvf "react-native-remarkable-$VERSION.tar.gz" \
+            "react-native-remarkable-$VERSION" )
+          ls -lh release/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: react-native-remarkable-${{ env.VERSION }}
+          path: release/react-native-remarkable-${{ env.VERSION }}.tar.gz
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/react-native-remarkable-${{ env.VERSION }}.tar.gz
+          generate_release_notes: true
+          body: |
+            ## Install on a reMarkable Paper Pro
+
+            **One-liner from the device** (requires SSH + Wi-Fi):
+
+            ```sh
+            ssh root@<device-ip> 'curl -sSL \
+              https://github.com/${{ github.repository }}/releases/latest/download/react-native-remarkable-${{ env.VERSION }}.tar.gz \
+              | tar xz -C /tmp && /tmp/react-native-remarkable-${{ env.VERSION }}/install.sh'
+            ```
+
+            **Or manually:**
+
+            1. Download `react-native-remarkable-${{ env.VERSION }}.tar.gz` below.
+            2. `scp` the archive to the device, extract it, and run `./install.sh`.
+            3. Launch with `~/rn-app/start.sh` (this stops `xochitl` — reboot to restore the default UI).
