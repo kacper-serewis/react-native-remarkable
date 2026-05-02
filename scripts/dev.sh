@@ -2,10 +2,11 @@
 set -e
 
 DEVICE=${1:-192.168.1.196}
+ROOT="$(dirname $0)/.."
 
-echo "=== Bundling + deploying JS only ==="
+echo "=== Rebuilding JS + deploying ==="
 
-cd template
+cd $ROOT/template
 npx react-native bundle \
   --platform android \
   --dev false \

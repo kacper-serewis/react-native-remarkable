@@ -1,23 +1,23 @@
 #!/bin/bash
 set -e
 
-echo "=== react-native-remarkable build script ==="
+echo "=== react-native-remarkable build ==="
 
-# ── Config ────────────────────────────────────────────────────────
-CONTAINER="hermes-build3"
-OUT="./dist"
-mkdir -p $OUT
+DIST="./dist"
+mkdir -p $DIST
 
-echo "[1/3] Building C++ host in Docker..."
-docker start $CONTAINER 2>/dev/null || true
-docker exec $CONTAINER bash -c "
-  cd /rn_layout && cmake --build build
-"
-docker cp $CONTAINER:/rn_layout/build/rn-layout $OUT/rn-layout
-docker cp $CONTAINER:/hermes/build/lib/libhermesvm.so $OUT/libhermesvm.so
+echo "[1/3] Building C++ host (this takes ~10 min on first run)..."
+docker build --platform linux/arm64 -t react-native-remarkable .
 
-echo "[2/3] Building JS bundle..."
+echo "[2/3] Copying binaries..."
+docker run --rm --platform linux/arm64 \
+  -v $(pwd)/dist:/out \
+  react-native-remarkable \
+  sh -c "cp /output/rn-layout /out/rn-layout && cp /output/libhermesvm.so /out/libhermesvm.so"
+
+echo "[3/3] Bundling JS..."
 cd template
+npm install
 npx react-native bundle \
   --platform android \
   --dev false \
@@ -26,7 +26,8 @@ npx react-native bundle \
   --reset-cache
 cd ..
 
-echo "[3/3] Done! Output in ./dist:"
-ls -lh $OUT
 echo ""
-echo "Deploy with: ./scripts/deploy.sh <device-ip>"
+echo "Done! Output in ./dist:"
+ls -lh $DIST
+echo ""
+echo "Deploy: ./scripts/deploy.sh <device-ip>"
