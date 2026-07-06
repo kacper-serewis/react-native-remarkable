@@ -19,9 +19,8 @@ cd ..
 scp dist/remarkable.bundle.js root@$DEVICE:~/rn-app/remarkable.bundle.js
 
 ssh root@$DEVICE "
+  systemctl stop xochitl 2>/dev/null || true
   kill \$(ps | grep rn-layout | grep -v grep | awk '{print \$1}') 2>/dev/null || true
-  kill \$(ps | grep xochitl | grep -v grep | awk '{print \$1}') 2>/dev/null || true
   LD_LIBRARY_PATH=~/hermes-host \
-  QT_QUICK_BACKEND=epaper \
-  ~/rn-app/rn-layout ~/rn-app/remarkable.bundle.js -platform epaper
+  ~/rn-app/rn-layout ~/rn-app/remarkable.bundle.js
 " 2>&1 | node "$ROOT/scripts/translate-stack.js"

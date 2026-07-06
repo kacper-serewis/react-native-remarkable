@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: true
 
       - name: Set up QEMU (arm64 emulation)
         uses: docker/setup-qemu-action@v3
@@ -50,7 +52,7 @@ jobs:
           docker run --rm --platform linux/arm64 \
             -v "$PWD/dist:/out" \
             react-native-remarkable:ci \
-            sh -c "cp /output/rn-layout /out/rn-layout && cp /output/libhermesvm.so /out/libhermesvm.so"
+            sh -c "cp /output/rn-layout /out/rn-layout && cp /output/libquill.so /out/libquill.so && cp /output/libhermesvm.so /out/libhermesvm.so"
           ls -lh dist/
 
       - name: Install JS deps
@@ -79,6 +81,7 @@ jobs:
           STAGE="release/react-native-remarkable-$VERSION"
           mkdir -p "$STAGE"
           cp dist/rn-layout                    "$STAGE/"
+          cp dist/libquill.so                  "$STAGE/"
           cp dist/libhermesvm.so               "$STAGE/"
           cp dist/remarkable.bundle.js         "$STAGE/"
           cp dist/remarkable.bundle.js.map     "$STAGE/"

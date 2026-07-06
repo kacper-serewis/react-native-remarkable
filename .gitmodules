@@ -1,0 +1,3 @@
+[submodule "riddle"]
+	path = riddle
+	url = https://github.com/MaximeRivest/riddle.git

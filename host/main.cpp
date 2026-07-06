@@ -1,82 +1,93 @@
 #include <QGuiApplication>
-#include <QScreen>
-#include <QQmlApplicationEngine>
-#include <QQmlContext>
-#include <QQuickImageProvider>
 #include <QPainter>
 #include <QImage>
-#include <QObject>
 #include <QDebug>
 #include <QTimer>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QUrl>
+#include <algorithm>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
 #include <hermes/hermes.h>
 #include "layout.h"
 #include "input.h"
+#include "quill.h"
 
 using namespace facebook;
 using namespace facebook::jsi;
 
-// ── Image provider ────────────────────────────────────────────────
-class FrameProvider : public QQuickImageProvider {
-public:
-  FrameProvider() : QQuickImageProvider(QQuickImageProvider::Image) {}
-  void setImage(const QImage& img) { m_image = img; }
-  QImage requestImage(const QString&, QSize*, const QSize&) override {
-    return m_image;
-  }
-private:
-  QImage m_image;
-};
-
 // ── Screen ────────────────────────────────────────────────────────
-class Screen : public QObject {
-  Q_OBJECT
+// Paints the RN tree straight into quill's aux framebuffer — the vendor
+// e-ink engine's drawing buffer (libqsgepaper, taken over via the epfb-re
+// shim in libquill.so) — then swaps only the dirty region to glass.
+class Screen {
 public:
-  Screen(int w, int h, FrameProvider* fp, QObject* parent=nullptr)
-    : QObject(parent), m_image(w,h,QImage::Format_ARGB32), m_fp(fp) {
-    m_image.fill(Qt::white);
-    m_fp->setImage(m_image);
-  }
-
-  Q_INVOKABLE void touchDown(double x, double y) {
-    qDebug() << "[touch] down x=" << x << "y=" << y;
-    emit touched(x, y);
-  }
-  Q_INVOKABLE void touchUp() {
-    emit released();
-  }
-  Q_INVOKABLE void keyDown(int key, const QString& text) {
-    emit keyPressed(key, text);
+  bool init() {
+    if (quill_init() != 0) return false;
+    int w = quill_width(), h = quill_height();
+    unsigned char* buf = quill_buffer();
+    if (!buf || w <= 0 || h <= 0) return false;
+    auto fmt = (QImage::Format)quill_format();
+    m_front = QImage(buf, w, h, quill_stride(), fmt);
+    m_prev  = QImage(w, h, fmt);
+    m_front.fill(Qt::white);
+    m_prev.fill(Qt::white);
+    quill_swap(0, 0, w, h, /*QualityFull*/4, /*flashing*/1);
+    return true;
   }
 
   void render(RNNode* root) {
-    m_image.fill(Qt::white);
-    QPainter p(&m_image);
+    m_front.fill(Qt::white);
+    QPainter p(&m_front);
     p.setRenderHint(QPainter::Antialiasing);
     paintNode(p, root, 0, 0);
     p.end();
-    m_fp->setImage(m_image);
-    emit frameReady();
+
+    // E-ink updates are expensive: diff against the previous frame and
+    // swap only the changed bounding box.
+    const int w = m_front.width(), h = m_front.height();
+    const int bpp = m_front.depth() / 8;
+    const int rowBytes = w * bpp;
+    int y0 = -1, y1 = -1;
+    for (int y = 0; y < h; y++)
+      if (memcmp(m_front.constScanLine(y), m_prev.constScanLine(y), rowBytes))
+        { y0 = y; break; }
+    if (y0 < 0) return;  // nothing changed
+    for (int y = h - 1; y >= y0; y--)
+      if (memcmp(m_front.constScanLine(y), m_prev.constScanLine(y), rowBytes))
+        { y1 = y; break; }
+    int x0 = w - 1, x1 = 0;
+    for (int y = y0; y <= y1; y++) {
+      const uchar* a = m_front.constScanLine(y);
+      const uchar* b = m_prev.constScanLine(y);
+      int lo = 0;
+      while (lo < rowBytes && a[lo] == b[lo]) lo++;
+      if (lo == rowBytes) continue;
+      int hi = rowBytes - 1;
+      while (hi > lo && a[hi] == b[hi]) hi--;
+      x0 = std::min(x0, lo / bpp);
+      x1 = std::max(x1, hi / bpp);
+    }
+    for (int y = y0; y <= y1; y++)
+      memcpy(m_prev.scanLine(y), m_front.constScanLine(y), rowBytes);
+    quill_swap(x0, y0, x1 - x0 + 1, y1 - y0 + 1, /*Quality3*/3, 0);
   }
 
-  int W() const { return m_image.width(); }
-  int H() const { return m_image.height(); }
+  // Flashing clear of the whole panel (ghost removal).
+  void fullRefresh() {
+    quill_swap(0, 0, m_front.width(), m_front.height(), 4, 1);
+  }
 
-signals:
-  void frameReady();
-  void touched(double x, double y);
-  void released();
-  void keyPressed(int key, QString text);
+  int W() const { return m_front.width(); }
+  int H() const { return m_front.height(); }
 
 private:
-  QImage m_image;
-  FrameProvider* m_fp;
+  QImage m_front;  // wraps the aux framebuffer bits — do not reassign
+  QImage m_prev;
 };
 
 // ── JSI helpers ───────────────────────────────────────────────────
@@ -351,6 +362,16 @@ static void wire(jsi::Runtime& rt, Screen* scr,
         return jsi::Value::undefined();
       }));
 
+  // N.fullRefresh() — flashing clear of the whole panel (ghost removal)
+  obj.setProperty(rt, "fullRefresh",
+    jsi::Function::createFromHostFunction(rt,
+      jsi::PropNameID::forAscii(rt,"fullRefresh"),0,
+      [scr](jsi::Runtime&,const jsi::Value&,
+            const jsi::Value*,size_t)->jsi::Value{
+        scr->fullRefresh();
+        return jsi::Value::undefined();
+      }));
+
   // N.onTouchDown / onTouchUp
   obj.setProperty(rt, "onTouchDown",
     jsi::Function::createFromHostFunction(rt,
@@ -374,18 +395,24 @@ static void wire(jsi::Runtime& rt, Screen* scr,
   rt.global().setProperty(rt, "N", obj);
 }
 
-#include "main.moc"
-
 int main(int argc, char* argv[]) {
   if (argc < 2) { qWarning("Usage: rn-layout <bundle.js>"); return 1; }
 
+  // Takeover mode has no window system: default to the offscreen QPA so
+  // QGuiApplication (font database for QPainter text) comes up without a
+  // display server. The panel is driven by quill, not by Qt.
+  if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM"))
+    qputenv("QT_QPA_PLATFORM", "offscreen");
   QGuiApplication app(argc, argv);
-  auto* fp  = new FrameProvider();
-  QSize screenSize = QGuiApplication::primaryScreen()->size();
-  int sw = screenSize.width()  > 0 ? screenSize.width()  : 1404;
-  int sh = screenSize.height() > 0 ? screenSize.height() : 1872;
-  qDebug() << "[host] screen" << sw << "x" << sh;
-  auto* scr = new Screen(sw, sh, fp, &app);
+
+  Screen screen;
+  if (!screen.init()) {
+    qWarning("quill: failed to take over the e-ink engine "
+             "(is xochitl stopped? is libqsgepaper.so reachable?)");
+    return 1;
+  }
+  Screen* scr = &screen;
+  qDebug() << "[host] screen" << scr->W() << "x" << scr->H();
 
   std::ifstream file(argv[1]);
   std::ostringstream ss; ss << file.rdbuf();
@@ -395,82 +422,124 @@ int main(int argc, char* argv[]) {
   NodeMap nodes;
   TouchCB tcb;
 
-  // Input via Qt signals from QML MouseArea
-  QObject::connect(scr, &Screen::touched,
-    [&](double x, double y) {
-      // Fire both the legacy callback and N.onTouchDown
-      if (tcb.onTouchDown) {
-        try { tcb.onTouchDown->call(*runtime,
-                jsi::Value(x), jsi::Value(y)); }
-        catch(...) {}
-      }
-      // Also call global __rmTouchDown if set by renderer
-      try {
-        auto global = runtime->global();
-        if (global.hasProperty(*runtime, "__rmTouchDown")) {
-          auto fn = global.getPropertyAsFunction(*runtime, "__rmTouchDown");
-          fn.call(*runtime, jsi::Value(x), jsi::Value(y));
-        } else {
-          qWarning() << "[touch] __rmTouchDown not set on global";
-        }
-      } catch (const jsi::JSError& e) {
-        qWarning() << "[touch] JS error:" << e.getMessage().c_str();
-        qWarning() << "Stack:" << e.getStack().c_str();
-      } catch (const std::exception& e) {
-        qWarning() << "[touch] C++ error:" << e.what();
-      } catch (...) {
-        qWarning() << "[touch] unknown error";
-      }
-    });
-  QObject::connect(scr, &Screen::released,
-    [&]() {
-      if (tcb.onTouchUp) {
-        try { tcb.onTouchUp->call(*runtime); }
-        catch(...) {}
-      }
-      try {
-        auto global = runtime->global();
-        if (global.hasProperty(*runtime, "__rmTouchUp")) {
-          auto fn = global.getPropertyAsFunction(*runtime, "__rmTouchUp");
-          fn.call(*runtime);
-        }
-      } catch(...) {}
-    });
+  // ── Input: raw evdev (no window system in takeover mode) ────────
+  // Readers emit normalized 0..1 coordinates; scale to screen pixels here.
+  // If the touch panel turns out to be rotated relative to the display,
+  // fix it with RN_TOUCH_SWAP_XY / RN_TOUCH_INVERT_X / RN_TOUCH_INVERT_Y.
+  const bool swapXY = qEnvironmentVariableIntValue("RN_TOUCH_SWAP_XY") != 0;
+  const bool invX   = qEnvironmentVariableIntValue("RN_TOUCH_INVERT_X") != 0;
+  const bool invY   = qEnvironmentVariableIntValue("RN_TOUCH_INVERT_Y") != 0;
+  auto mapPoint = [scr, swapXY, invX, invY](double nx, double ny,
+                                            double& x, double& y) {
+    if (swapXY) std::swap(nx, ny);
+    if (invX) nx = 1.0 - nx;
+    if (invY) ny = 1.0 - ny;
+    x = nx * (scr->W() - 1);
+    y = ny * (scr->H() - 1);
+  };
 
-  // Map Qt key codes to JS-friendly names. Printable characters arrive
-  // via the `text` argument; we only need names for the special ones.
-  auto qtKeyName = [](int key) -> std::string {
-    switch (key) {
-      case Qt::Key_Backspace: return "Backspace";
-      case Qt::Key_Return:
-      case Qt::Key_Enter:     return "Enter";
-      case Qt::Key_Escape:    return "Escape";
-      case Qt::Key_Tab:       return "Tab";
-      case Qt::Key_Left:      return "ArrowLeft";
-      case Qt::Key_Right:     return "ArrowRight";
-      case Qt::Key_Up:        return "ArrowUp";
-      case Qt::Key_Down:      return "ArrowDown";
-      case Qt::Key_Home:      return "Home";
-      case Qt::Key_End:       return "End";
-      case Qt::Key_Delete:    return "Delete";
-      default:                return "";
+  auto touchDown = [&, mapPoint](double nx, double ny) {
+    double x, y;
+    mapPoint(nx, ny, x, y);
+    qDebug() << "[touch] down x=" << x << "y=" << y;
+    // Fire both the legacy callback and N.onTouchDown
+    if (tcb.onTouchDown) {
+      try { tcb.onTouchDown->call(*runtime,
+              jsi::Value(x), jsi::Value(y)); }
+      catch(...) {}
+    }
+    // Also call global __rmTouchDown if set by renderer
+    try {
+      auto global = runtime->global();
+      if (global.hasProperty(*runtime, "__rmTouchDown")) {
+        auto fn = global.getPropertyAsFunction(*runtime, "__rmTouchDown");
+        fn.call(*runtime, jsi::Value(x), jsi::Value(y));
+      } else {
+        qWarning() << "[touch] __rmTouchDown not set on global";
+      }
+    } catch (const jsi::JSError& e) {
+      qWarning() << "[touch] JS error:" << e.getMessage().c_str();
+      qWarning() << "Stack:" << e.getStack().c_str();
+    } catch (const std::exception& e) {
+      qWarning() << "[touch] C++ error:" << e.what();
+    } catch (...) {
+      qWarning() << "[touch] unknown error";
     }
   };
 
-  QObject::connect(scr, &Screen::keyPressed,
-    [&, qtKeyName](int key, QString text) {
-      try {
-        auto global = runtime->global();
-        if (!global.hasProperty(*runtime, "__rmKeyDown")) return;
-        auto fn = global.getPropertyAsFunction(*runtime, "__rmKeyDown");
-        fn.call(*runtime,
-          jsi::String::createFromUtf8(*runtime, qtKeyName(key)),
-          jsi::String::createFromUtf8(*runtime, text.toStdString()));
-      } catch (const jsi::JSError& e) {
-        qWarning() << "[key] JS error:" << e.getMessage().c_str();
-        qWarning() << "Stack:" << e.getStack().c_str();
-      } catch (...) {}
-    });
+  auto touchMove = [&, mapPoint](double nx, double ny) {
+    double x, y;
+    mapPoint(nx, ny, x, y);
+    try {
+      auto global = runtime->global();
+      if (global.hasProperty(*runtime, "__rmTouchMove")) {
+        auto fn = global.getPropertyAsFunction(*runtime, "__rmTouchMove");
+        fn.call(*runtime, jsi::Value(x), jsi::Value(y));
+      }
+    } catch(...) {}
+  };
+
+  auto touchUp = [&]() {
+    if (tcb.onTouchUp) {
+      try { tcb.onTouchUp->call(*runtime); }
+      catch(...) {}
+    }
+    try {
+      auto global = runtime->global();
+      if (global.hasProperty(*runtime, "__rmTouchUp")) {
+        auto fn = global.getPropertyAsFunction(*runtime, "__rmTouchUp");
+        fn.call(*runtime);
+      }
+    } catch(...) {}
+  };
+
+  auto keyDown = [&](const QString& name, const QString& text) {
+    try {
+      auto global = runtime->global();
+      if (!global.hasProperty(*runtime, "__rmKeyDown")) return;
+      auto fn = global.getPropertyAsFunction(*runtime, "__rmKeyDown");
+      fn.call(*runtime,
+        jsi::String::createFromUtf8(*runtime, name.toStdString()),
+        jsi::String::createFromUtf8(*runtime, text.toStdString()));
+    } catch (const jsi::JSError& e) {
+      qWarning() << "[key] JS error:" << e.getMessage().c_str();
+      qWarning() << "Stack:" << e.getStack().c_str();
+    } catch (...) {}
+  };
+
+  PointerReader touch, pen;
+  KeyboardReader keyboard, power;
+
+  touch.onDown = touchDown;
+  touch.onMove = touchMove;
+  touch.onUp   = touchUp;
+  // Takeover mode owns the screen; a 5-finger tap is the escape hatch
+  // (same gesture as riddle).
+  touch.onFiveFinger = [&app] {
+    qDebug() << "[input] five-finger tap — exiting";
+    app.quit();
+  };
+  pen.onDown = touchDown;
+  pen.onMove = touchMove;
+  pen.onUp   = touchUp;
+
+  keyboard.onKey = keyDown;
+  power.onKey = [&app](const QString& name, const QString&) {
+    if (name == "Power") {
+      qDebug() << "[input] power button — exiting";
+      app.quit();
+    }
+  };
+
+  QString touchDev = findInputDevice({"touch"});
+  QString penDev   = findInputDevice({"marker", "wacom", "stylus"});
+  QString kbdDev   = findInputDevice({"keyboard", "folio"});
+  QString pwrDev   = findInputDevice({"powerkey"});
+  if (!touchDev.isEmpty()) touch.start(touchDev);
+  else qWarning() << "[input] no touchscreen found";
+  if (!penDev.isEmpty())   pen.start(penDev);
+  if (!kbdDev.isEmpty())   keyboard.start(kbdDev);
+  if (!pwrDev.isEmpty())   power.start(pwrDev);
 
   // Console
   auto makeLog = [&](std::string lv) {
@@ -787,50 +856,6 @@ int main(int argc, char* argv[]) {
     qWarning() << "Stack:" << e.getStack().c_str();
     return 1;
   }
-
-
-  QQmlApplicationEngine engine;
-  engine.addImageProvider("rnframe", fp);
-  engine.rootContext()->setContextProperty("rnScreen", scr);
-  engine.loadData(R"(
-    import QtQuick
-    import QtQuick.Window
-    Window {
-      width: Screen.width
-      height: Screen.height
-      visible: true
-      Item {
-        id: root
-        anchors.fill: parent
-        focus: true
-        Keys.onPressed: (event) => {
-          rnScreen.keyDown(event.key, event.text)
-          event.accepted = true
-        }
-        Image {
-          id: frame
-          anchors.fill: parent
-          cache: false
-          source: "image://rnframe/frame"
-        }
-        MouseArea {
-          anchors.fill: parent
-          onPressed: {
-            root.forceActiveFocus()
-            rnScreen.touchDown(mouseX, mouseY)
-          }
-          onReleased: rnScreen.touchUp()
-        }
-      }
-      Connections {
-        target: rnScreen
-        function onFrameReady() {
-          frame.source = ""
-          frame.source = "image://rnframe/frame"
-        }
-      }
-    }
-  )");
 
   return app.exec();
 }

@@ -10,9 +10,10 @@ Write React apps in JSX and run them on your reMarkable Paper Pro.
 |---|---|
 | JS Engine | Hermes |
 | Layout | Yoga (Flexbox) |
-| Renderer | Qt 6 + epaper backend |
+| Renderer | QPainter → quill (vendor e-ink engine takeover) |
 | Bridge | JSI (C++) |
-| Display | DRM/KMS + e-ink waveform |
+| Display | libqsgepaper waveform engine via the epfb-re shim ([riddle/quill](https://github.com/MaximeRivest/riddle)) |
+| Input | raw evdev (touchscreen, pen, Type Folio, power button) |
 
 ## Requirements
 
@@ -42,7 +43,9 @@ ssh root@<device-ip> '
 3. `cd /tmp && tar xzf react-native-remarkable-*.tar.gz && cd react-native-remarkable-* && ./install.sh`
 4. Launch the app: `~/rn-app/start.sh`
 
-`start.sh` stops `xochitl` (the default reMarkable UI) so we can take over the screen. To restore xochitl: reboot, or `systemctl start xochitl`.
+`start.sh` stops `xochitl` (the default reMarkable UI) — the app takes over the e-ink engine directly. **Exit the app with a 5-finger tap or the power button.** To restore xochitl: reboot, or `systemctl start xochitl`.
+
+If touch input appears mirrored or rotated, set `RN_TOUCH_SWAP_XY=1`, `RN_TOUCH_INVERT_X=1`, or `RN_TOUCH_INVERT_Y=1` when launching.
 
 ## Quick Start
 
@@ -116,11 +119,13 @@ N.createNode() / N.appendChild() / N.commit()
 ↓ JSI bridge (C++)
 Yoga layout pass
 ↓
-QPainter draw calls
+QPainter draw calls into the aux framebuffer
 ↓
-Qt epaper platform plugin
-↓
-E-ink display (reMarkable Paper Pro)## Device setup
+quill (libquill.so — epfb-re shim over vendor libqsgepaper.so)
+↓ dirty-rect swapBuffers
+E-ink display (reMarkable Paper Pro)
+
+Input flows the other way: raw evdev (`/dev/input/event*`) → touch/pen/keyboard readers in the host → `__rmTouchDown` / `__rmKeyDown` in JS. There is no window system: `xochitl` is stopped and this process drives the panel.## Device setup
 
 1. Enable developer mode: Settings → Security → Developer mode
 2. Find your device IP: Settings → Wi-Fi → tap network
@@ -136,9 +141,9 @@ E-ink display (reMarkable Paper Pro)## Device setup
 - [ ] **Touch up + long-press.** `__rmTouchUp` is a no-op. Wire `onPressOut` and add long-press detection in JS via `setTimeout`.
 
 ### E-paper specific
-- [x] ~~Partial refresh.~~ Already happening — the reMarkable epaper QPA backend diffs framebuffers and only drives waveform updates for changed regions. We repaint the full `QImage` each commit; the driver slices it for us.
-- [ ] **Refresh-mode hints per node.** `refreshMode="fast" | "quality"` prop to choose A2 (fast, mono) vs GC16 (quality) waveforms. Critical for animations vs. static text.
-- [ ] **Pen / stylus input.** Paper Pro has a Wacom digitizer; we currently only handle finger touch via `MouseArea`. Read pen evdev events and expose a JS gesture stream.
+- [x] ~~Partial refresh.~~ The host diffs each committed frame against the previous one and swaps only the dirty bounding box to glass (`Quality3` waveform). `N.fullRefresh()` is exposed to JS for a flashing ghost-removal clear.
+- [ ] **Refresh-mode hints per node.** `refreshMode="fast" | "quality"` prop to choose the fastest (DU-ish, mode 0) vs full-quality (mode 4) waveforms per update. The quill C ABI already takes the mode per swap — plumb it through `N.commit`.
+- [x] ~~Pen / stylus input.~~ The pen (evdev `marker` device) now drives the same pointer path as finger touch — taps work everywhere. A pressure/gesture stream for drawing apps is still TODO (quill's mode-0 swaps make low-latency ink feasible — see `riddle/quill/src/scribble.c`).
 
 ### Networking
 - [x] ~~`fetch`~~ — implemented via `QNetworkAccessManager`. C++ host registers `N.fetch(url, opts)` returning a JS Promise; the inline polyfill exposes a browser-style `globalThis.fetch` with `.text()` / `.json()` / `.headers.get(name)`. Supports `GET`/`POST`/`PUT`/`DELETE`/`HEAD` plus arbitrary methods, request body (string), request headers, and a 30s default transfer timeout. Reply finishes on the Qt main thread, which is also the JSI thread, so promise resolution is thread-safe. No streaming, no `FormData`, no abort signal yet.
@@ -146,7 +151,7 @@ E-ink display (reMarkable Paper Pro)## Device setup
 ### Component library
 - [ ] **`Pressable`** with proper press/release visual states (current `TouchableOpacity` doesn't even change opacity).
 - [ ] **`ScrollView`** — Yoga `overflow: scroll`, scroll state in JS, clip rect in `paintNode`.
-- [x] ~~`TextInput`~~ — physical keys (BT/folio): QML root `Item` captures `Keys.onPressed`, the C++ host maps Qt key codes to JS-friendly names (`"Backspace"`, `"Enter"`, `"ArrowLeft"`, …) and forwards `(keyName, text)` to a global `__rmKeyDown`. JS-side `RemarkableRenderer` exposes `setKeyHandler` / `clearKeyHandler` / `dispatchKey`; `TextInput` registers a handler when focused (tap-to-focus) and renders value + cursor (`|`).
+- [x] ~~`TextInput`~~ — physical keys (Type Folio): the host reads the keyboard evdev device directly, maps Linux keycodes to JS-friendly names (`"Backspace"`, `"Enter"`, `"ArrowLeft"`, …) and forwards `(keyName, text)` to a global `__rmKeyDown`. JS-side `RemarkableRenderer` exposes `setKeyHandler` / `clearKeyHandler` / `dispatchKey`; `TextInput` registers a handler when focused (tap-to-focus) and renders value + cursor (`|`).
 - [x] ~~On-screen keyboard~~ — **Custom**, rendered with our own `<View>`/`<Text>` primitives. There is no system OSK to call: reMarkable's keyboard is QML embedded inside the closed-source `xochitl` app, not a system input-method service, and the QPA `epaperkeyboardhandler` is just an evdev forwarder for physical keys (its name is misleading). `qtvirtualkeyboard` isn't shipped on the device firmware. So `OnScreenKeyboard` is our own QWERTY/symbols layout that auto-shows whenever any `TextInput` is focused (via `useHasFocusedInput`); each key calls `dispatchKey()` which feeds the same handler physical keys use, so `TextInput` is agnostic to input source. Overlays the bottom of the screen via `position: 'absolute'` (added to `applyProps` and `styleToProps` to support this). Embedding `qtvirtualkeyboard` is a possible future option but means cross-compiling the module and shipping its plugin alongside the binary.
 - [ ] **`Image`** — load PNG/JPEG via Qt and paint into a node's bounds.
 
@@ -162,7 +167,7 @@ E-ink display (reMarkable Paper Pro)## Device setup
 - [ ] Document the JS-only fast path (`dev.sh`) more prominently.
 
 ### Bigger swings
-- [ ] ~~Drop QML.~~ **Not viable on Paper Pro.** Tried it: replacing the QML `Image` with `QRasterWindow` produces a window that never draws anything (not even a clear). The reMarkable epaper QPA plugin appears to expose only screen geometry + input — display flushing to the e-ink panel is done by the dedicated **QtQuick scenegraph backend** (`QT_QUICK_BACKEND=epaper`), not by `QPlatformBackingStore::flush()`. So removing QtQuick removes the only working display path. Doing this for real would require writing a custom QPA backing store implementation that drives the e-ink waveform driver — much bigger than the binary-size win is worth.
+- [x] ~~Drop QML.~~ **Done, via quill.** The earlier attempt failed because the epaper QPA only exposes geometry + input and display flushing lived in the QtQuick scenegraph backend. quill (from the [riddle](https://github.com/MaximeRivest/riddle) submodule) sidesteps Qt's display stack entirely: an epfb-re-style QImage-constructor interposition shim over the vendor `libqsgepaper.so` waveform engine hands us the aux framebuffer and `swapBuffers` directly. The host paints with QPainter into that buffer and swaps dirty rects itself; QtQuick, QML, and the QPA display path are gone (`QGuiApplication` runs on the offscreen platform, kept only for the font database). Input moved to raw evdev.
 - [x] ~~Concurrent React.~~ `createContainer` now passes `tag: 1` (ConcurrentRoot) — Suspense, transitions, and `useDeferredValue` are available.
 - [ ] **`requestAnimationFrame`** driven by a 10–15 Hz `QTimer` for the cases where animation makes sense on e-paper (drag handles, sliders).
 
@@ -170,5 +175,7 @@ E-ink display (reMarkable Paper Pro)## Device setup
 
 Built on [Hermes](https://hermesengine.dev),
 [Yoga](https://yogalayout.dev),
-[Qt](https://qt.io), and the
+[Qt](https://qt.io),
+[quill from riddle](https://github.com/MaximeRivest/riddle) (Maxime Rivest) with
+[asivery's epfb-re](https://github.com/asivery) interposition technique, and the
 [reMarkable developer portal](https://developer.remarkable.com).

@@ -10,6 +10,7 @@ echo "=== Installing react-native-remarkable ==="
 mkdir -p "$HOME/rn-app" "$HOME/hermes-host"
 
 cp "$HERE/rn-layout"             "$HOME/rn-app/rn-layout"
+cp "$HERE/libquill.so"           "$HOME/rn-app/libquill.so"
 cp "$HERE/libhermesvm.so"        "$HOME/hermes-host/libhermesvm.so"
 cp "$HERE/remarkable.bundle.js"  "$HOME/rn-app/remarkable.bundle.js"
 cp "$HERE/start.sh"              "$HOME/rn-app/start.sh"
